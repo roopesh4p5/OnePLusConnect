@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One+Connect</title>
+<meta name="description" content="Turn a OnePlus Pad Go 2 into a second Mac display, over USB-C or Wi-Fi. Touch on the tablet drives the Mac. Local only, no cloud.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="android/app/src/main/res/drawable-nodpi/logo.png">
+<meta property="og:title" content="One+Connect">
+<meta property="og:description" content="Turn a OnePlus Pad Go 2 into a second Mac display, over USB-C or Wi-Fi.">
+<meta property="og:image" content="https://github.com/roopesh4p5/OnePLusConnect/raw/main/logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+  /* The product's own artwork is a deep navy plate, so the page commits to that one world
+     and paints every surface explicitly rather than inheriting a host theme. */
+  :root {
+    --ink:        #060E1C;
+    --surface:    #0A1830;
+    --surface-2:  #0F2340;
+    --line:       #1A3556;
+    --line-soft:  #13273F;
+    --text:       #E7EEF9;
+    --muted:      #92A7C4;
+    --accent:     #3FD9C7;
+    --accent-dim: #2AA99B;
+    --accent-wash: rgba(63, 217, 199, .10);
+    --amber:      #E2A94E;
+
+    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --measure: 1080px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text);
+    font: 400 16px/1.65 var(--body);
+    letter-spacing: .005em;
+  }
+
+  .wrap {
+    width: 100%;
+    max-width: var(--measure);
+    margin-inline: auto;
+    padding-inline: 24px;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: #6FE8DA; }
+  a:focus-visible,
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+  h1, h2, h3 { font-family: var(--display); font-weight: 600; text-wrap: balance; margin: 0; }
+
+  .eyebrow {
+    font: 500 12px/1 var(--mono);
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--line-soft);
+    background: linear-gradient(180deg, var(--surface) 0%, var(--ink) 100%);
+  }
+  .masthead .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding-block: 18px;
+  }
+  .wordmark {
+    font: 600 18px/1 var(--display);
+    letter-spacing: -.01em;
+    color: var(--text);
+  }
+  .wordmark span { color: var(--accent); }
+  .masthead nav {
+    display: flex;
+    gap: 22px;
+    font: 400 14px/1 var(--body);
+  }
+  .masthead nav a { color: var(--muted); }
+  .masthead nav a:hover { color: var(--text); }
+
+  /* ---------- hero ---------- */
+  .hero .wrap {
+    display: grid;
+    grid-template-columns: 1.1fr .9fr;
+    gap: 56px;
+    align-items: center;
+    padding-block: 72px 64px;
+  }
+  .hero h1 {
+    font-size: clamp(34px, 5.2vw, 54px);
+    line-height: 1.04;
+    letter-spacing: -.022em;
+    font-stretch: 105%;
+    margin-block: 18px 20px;
+  }
+  .hero h1 em {
+    font-style: normal;
+    color: var(--accent);
+  }
+  .lede {
+    font-size: 17.5px;
+    color: #C6D5E8;
+    max-width: 46ch;
+    margin: 0;
+  }
+
+  .downloads {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 30px;
+  }
+  .btn {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 13px 22px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    text-decoration: none;
+    transition: transform .15s ease, background-color .15s ease, border-color .15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn strong {
+    font: 500 15px/1.2 var(--body);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .btn small {
+    font: 400 11.5px/1.3 var(--mono);
+    letter-spacing: .03em;
+    opacity: .78;
+  }
+  .btn svg { flex: none; }
+  .btn-primary {
+    background: var(--accent);
+    color: #04141A;
+  }
+  .btn-primary:hover { background: #58E5D4; color: #04141A; }
+  .btn-secondary {
+    border-color: var(--line);
+    background: var(--surface);
+    color: var(--text);
+  }
+  .btn-secondary:hover { border-color: var(--accent-dim); color: var(--text); }
+
+  .assurance {
+    margin: 22px 0 0;
+    font: 400 13.5px/1.6 var(--body);
+    color: var(--muted);
+    max-width: 44ch;
+  }
+
+  /* hero plate */
+  .plate {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background:
+      radial-gradient(120% 90% at 50% 0%, rgba(63, 217, 199, .13) 0%, transparent 62%),
+      var(--surface);
+    padding: 34px 34px 0;
+    overflow: hidden;
+  }
+  .plate img {
+    display: block;
+    width: 210px;
+    max-width: 100%;
+    margin: 0 auto;
+    border-radius: 22px;
+  }
+  .specs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--line-soft);
+    margin-top: 30px;
+  }
+  .specs div {
+    padding: 16px 8px;
+    text-align: center;
+    border-left: 1px solid var(--line-soft);
+  }
+  .specs div:first-child { border-left: 0; }
+  .specs b {
+    display: block;
+    font: 500 15px/1.2 var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  .specs span {
+    display: block;
+    margin-top: 5px;
+    font: 400 10.5px/1 var(--mono);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ---------- generic section ---------- */
+  section { border-top: 1px solid var(--line-soft); }
+  section > .wrap { padding-block: 64px; }
+  .section-head { margin-bottom: 38px; max-width: 62ch; }
+  .section-head h2 {
+    font-size: clamp(24px, 3vw, 31px);
+    letter-spacing: -.018em;
+    margin-block: 12px 10px;
+  }
+  .section-head p { margin: 0; color: var(--muted); }
+
+  /* ---------- capabilities ---------- */
+  .caps {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2px;
+    background: var(--line-soft);
+    border-block: 1px solid var(--line-soft);
+  }
+  .cap {
+    background: var(--ink);
+    padding: 28px 30px 30px;
+  }
+  .cap h3 {
+    font-size: 17px;
+    letter-spacing: -.008em;
+    margin-bottom: 9px;
+  }
+  .cap p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .cap code, .inline-code {
+    font: 400 13px/1 var(--mono);
+    color: #BFE9E3;
+  }
+  .tag {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 7px;
+    border: 1px solid rgba(226, 169, 78, .45);
+    border-radius: 3px;
+    font: 500 10px/1.5 var(--mono);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--amber);
+    vertical-align: 2px;
+  }
+
+  /* ---------- pipeline ---------- */
+  .pipeline {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .node {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 20px 22px;
+  }
+  .node h3 {
+    font: 500 11px/1 var(--mono);
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  .node ul { margin: 0; padding-left: 0; list-style: none; }
+  .node li {
+    font: 400 13.5px/1.9 var(--body);
+    color: var(--muted);
+  }
+  .node li b { color: var(--text); font-weight: 500; }
+  .arrow {
+    align-self: center;
+    font: 400 18px/1 var(--mono);
+    color: var(--accent-dim);
+  }
+  .pipeline-note {
+    margin: 18px 0 0;
+    font: 400 13px/1.7 var(--mono);
+    color: var(--muted);
+  }
+
+  /* ---------- steps ---------- */
+  ol.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
+  ol.steps > li {
+    counter-increment: step;
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    gap: 22px;
+    padding-block: 26px;
+    border-top: 1px solid var(--line-soft);
+  }
+  ol.steps > li:first-child { border-top: 0; padding-top: 0; }
+  ol.steps > li::before {
+    content: counter(step, decimal-leading-zero);
+    font: 500 13px/1.7 var(--mono);
+    color: var(--accent);
+    letter-spacing: .06em;
+  }
+  ol.steps h3 { font-size: 17px; margin-bottom: 7px; letter-spacing: -.008em; }
+  ol.steps p { margin: 0; color: var(--muted); font-size: 14.5px; max-width: 62ch; }
+  ol.steps p + p { margin-top: 9px; }
+
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .route {
+    border: 1px solid var(--line-soft);
+    border-left: 2px solid var(--accent-dim);
+    border-radius: 0 6px 6px 0;
+    background: var(--surface);
+    padding: 16px 18px;
+  }
+  .route h4 {
+    font: 500 11px/1 var(--mono);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--text);
+    margin: 0 0 8px;
+  }
+  .route p { font-size: 13.5px; margin: 0; color: var(--muted); }
+
+  /* ---------- tables ---------- */
+  .table-scroll { overflow-x: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14.5px;
+  }
+  caption {
+    text-align: left;
+    font: 500 11px/1 var(--mono);
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 12px 18px 12px 0;
+    border-bottom: 1px solid var(--line-soft);
+    vertical-align: top;
+  }
+  th {
+    font: 500 11px/1.4 var(--mono);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  td { color: var(--muted); }
+  td:first-child { color: var(--text); white-space: nowrap; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text); }
+  .two-col-tables {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+  }
+
+  /* ---------- notes ---------- */
+  .notes { margin: 0; padding: 0; list-style: none; display: grid; gap: 14px; }
+  .notes li {
+    display: grid;
+    grid-template-columns: 132px 1fr;
+    gap: 20px;
+    font-size: 14.5px;
+    color: var(--muted);
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .notes li:last-child { border-bottom: 0; }
+  .notes b {
+    font: 500 11px/1.7 var(--mono);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+
+  /* ---------- footer ---------- */
+  footer {
+    border-top: 1px solid var(--line-soft);
+    background: var(--surface);
+  }
+  footer .wrap {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 14px;
+    padding-block: 30px 36px;
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+  footer .built { font: 400 12.5px/1.6 var(--mono); }
+
+  @media (max-width: 880px) {
+    .hero .wrap { grid-template-columns: 1fr; gap: 40px; padding-block: 52px 48px; }
+    .plate { order: -1; padding-top: 28px; }
+    .plate img { width: 148px; }
+    .caps { grid-template-columns: 1fr; }
+    .pipeline { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); justify-self: center; }
+    .split, .two-col-tables { grid-template-columns: 1fr; gap: 16px; }
+    .two-col-tables { gap: 34px; }
+  }
+  @media (max-width: 520px) {
+    .wrap { padding-inline: 18px; }
+    section > .wrap { padding-block: 48px; }
+    ol.steps > li { grid-template-columns: 34px 1fr; gap: 14px; }
+    .notes li { grid-template-columns: 1fr; gap: 4px; }
+    .btn { width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="wordmark">One<span>+</span>Connect</div>
+    <nav>
+      <a href="#setup">Setup</a>
+      <a href="#gestures">Touch</a>
+      <a href="https://github.com/roopesh4p5/OnePLusConnect">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <p class="eyebrow">Mac + OnePlus Pad Go 2</p>
+        <h1>Your tablet, working as a <em>second Mac display</em>.</h1>
+        <p class="lede">
+          One+Connect streams your Mac screen to the tablet over USB-C or Wi-Fi and sends
+          every touch back as mouse input. Mirror an existing display or extend the desktop
+          onto the tablet panel at its full 2800 &times; 1980 pixels.
+        </p>
+
+        <div class="downloads">
+          <a class="btn btn-primary" href="https://github.com/roopesh4p5/OnePLusConnect/raw/main/dist/One+Connect-0.1.0.dmg" download>
+            <strong>
+              <svg width="13" height="14" viewBox="0 0 13 14" aria-hidden="true"><path d="M6.5 0v9M2.5 6l4 4 4-4M.5 13h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Download for Mac
+            </strong>
+            <small>DMG &middot; 1.4 MB &middot; macOS 15+ &middot; Apple silicon</small>
+          </a>
+          <a class="btn btn-secondary" href="https://github.com/roopesh4p5/OnePLusConnect/raw/main/dist/OnePlusConnect-0.1.0.apk" download>
+            <strong>
+              <svg width="13" height="14" viewBox="0 0 13 14" aria-hidden="true"><path d="M6.5 0v9M2.5 6l4 4 4-4M.5 13h12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Download for tablet
+            </strong>
+            <small>APK &middot; 22 MB &middot; Android 10 or newer</small>
+          </a>
+        </div>
+
+        <p class="assurance">
+          Version 0.1.0. Frames travel over the USB-C cable or your own Wi-Fi network and
+          nowhere else &mdash; there is no account, no telemetry and no cloud service involved.
+        </p>
+      </div>
+
+      <div class="plate">
+        <img src="android/app/src/main/res/drawable-nodpi/logo.png" alt="One+Connect application icon">
+        <div class="specs">
+          <div><b>2800&times;1980</b><span>Native</span></div>
+          <div><b>60</b><span>Frames / s</span></div>
+          <div><b>HEVC</b><span>Codec</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">What it does</p>
+        <h2>Built for one pairing, tuned for it properly.</h2>
+        <p>Every setting below is in the Mac menu bar &mdash; nothing needs to be configured on the tablet.</p>
+      </div>
+
+      <div class="caps">
+        <article class="cap">
+          <h3>Mirror or extend<span class="tag">Extend is experimental</span></h3>
+          <p>Mirror duplicates a display you already have. Extend creates a virtual display at
+          the tablet's native pixel size, so text stays sharp instead of being scaled twice.</p>
+        </article>
+        <article class="cap">
+          <h3>USB-C or Wi-Fi, your choice</h3>
+          <p>Not a fallback order. Pick <span class="inline-code">Automatic</span>,
+          <span class="inline-code">USB cable only</span> or <span class="inline-code">Wi-Fi only</span> &mdash;
+          Wi-Fi stays wireless even with the cable plugged in, and switching takes effect immediately.</p>
+        </article>
+        <article class="cap">
+          <h3>Touch that behaves like a trackpad</h3>
+          <p>Tap, drag, long press, two-finger scroll and pinch all map onto real macOS events,
+          so the tablet drives whatever app is under the pointer.</p>
+        </article>
+        <article class="cap">
+          <h3>HEVC with adaptive bitrate</h3>
+          <p>HEVC carries the same picture in roughly half the bits of H.264, which is what keeps
+          a wireless link as sharp as the cable. When the link falls behind, the bitrate eases
+          down and recovers instead of dropping whole frames.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">How it works</p>
+        <h2>A short pipeline, both ends under your control.</h2>
+      </div>
+
+      <div class="pipeline">
+        <div class="node">
+          <h3>Mac</h3>
+          <ul>
+            <li><b>ScreenCaptureKit</b> captures the display</li>
+            <li><b>VideoToolbox</b> encodes HEVC or H.264</li>
+            <li><b>CGEvent</b> replays the tablet's touches</li>
+          </ul>
+        </div>
+        <div class="arrow" aria-hidden="true">&rarr;</div>
+        <div class="node">
+          <h3>Link</h3>
+          <ul>
+            <li><b>USB-C</b> through an adb port forward</li>
+            <li><b>Wi-Fi</b> straight to the tablet's address</li>
+            <li>One TCP stream either way, port 27183</li>
+          </ul>
+        </div>
+        <div class="arrow" aria-hidden="true">&rarr;</div>
+        <div class="node">
+          <h3>Tablet</h3>
+          <ul>
+            <li><b>MediaCodec</b> decodes in low-latency mode</li>
+            <li><b>SurfaceView</b> renders each frame on arrival</li>
+            <li>Touches go back as normalised coordinates</li>
+          </ul>
+        </div>
+      </div>
+      <p class="pipeline-note">
+        On Wi-Fi the tablet announces itself once a second on UDP 27184, so the Mac finds it
+        without you typing an address.
+      </p>
+    </div>
+  </section>
+
+  <section id="setup">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Setup</p>
+        <h2>Five steps, about three minutes.</h2>
+        <p>Do them in order &mdash; macOS grants the two permissions to the copy of the app in Applications, so install it before launching.</p>
+      </div>
+
+      <ol class="steps">
+        <li>
+          <div>
+            <h3>Install the Mac app</h3>
+            <p>Open the downloaded disk image and drag One+Connect into Applications. The app is
+            signed with a self-signed development certificate, so the first launch needs
+            right-click &rarr; Open rather than a double-click.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Grant Screen Recording and Accessibility</h3>
+            <p>The Setup Assistant opens on first launch with a button for each. Screen Recording
+            lets the app capture the display it sends; Accessibility lets it turn your touches into
+            clicks. Both are required, and macOS may ask you to relaunch once.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Install the tablet app</h3>
+            <p>Copy the APK to the tablet and tap it, allowing installation from unknown sources
+            when prompted. With adb on hand,
+            <span class="inline-code">adb install -r OnePlusConnect-0.1.0.apk</span> does the same thing.</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Connect the two</h3>
+            <p>Open One+Connect on the tablet, then pick your link in the Mac menu bar under
+            &ldquo;Connect over&rdquo;. The menu reads &ldquo;Ready to share&rdquo; once the handshake succeeds.</p>
+            <div class="split">
+              <div class="route">
+                <h4>Over USB-C</h4>
+                <p>Enable Developer Options &rarr; USB debugging on the tablet, plug in the cable and
+                accept the authorisation prompt. This route needs adb installed on the Mac.</p>
+              </div>
+              <div class="route">
+                <h4>Over Wi-Fi</h4>
+                <p>Put both devices on the same network. macOS asks once to allow local network
+                access. If your router blocks broadcasts, type the tablet's address into
+                Preferences &rarr; Wi-Fi.</p>
+              </div>
+            </div>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>Start sharing</h3>
+            <p>Choose Display &rarr; Mirror or Extended, then Start Sharing. The tablet goes
+            fullscreen and the Mac menu bar shows the live link. A three-finger tap on the tablet
+            brings up Stop Sharing; Diagnostics on the Mac shows throughput, latency, drops
+            and round-trip time while it runs.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="gestures">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Reference</p>
+        <h2>Touch mapping and quality presets.</h2>
+      </div>
+
+      <div class="two-col-tables">
+        <div class="table-scroll">
+          <table>
+            <caption>On the tablet</caption>
+            <thead>
+              <tr><th scope="col">Gesture</th><th scope="col">On the Mac</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Tap</td><td>Click</td></tr>
+              <tr><td>Drag</td><td>Click and drag</td></tr>
+              <tr><td>Long press</td><td>Right click</td></tr>
+              <tr><td>Two-finger move</td><td>Scroll</td></tr>
+              <tr><td>Pinch</td><td>Zoom, via Command plus or minus</td></tr>
+              <tr><td>Three-finger tap</td><td>Show the Stop Sharing overlay</td></tr>
+              <tr><td>Back</td><td>End the session</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <caption>Quality presets</caption>
+            <thead>
+              <tr><th scope="col">Preset</th><th scope="col">Resolution</th><th scope="col">Bitrate</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Battery Saver</td><td class="num">1280 &times; 900</td><td class="num">6 Mbps</td></tr>
+              <tr><td>Balanced</td><td class="num">1920 &times; 1350</td><td class="num">16 Mbps</td></tr>
+              <tr><td>Quality</td><td class="num">2240 &times; 1584</td><td class="num">30 Mbps</td></tr>
+              <tr><td>Native</td><td class="num">2800 &times; 1980</td><td class="num">60 Mbps</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="notes">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">Before you install</p>
+        <h2>Honest limits of this build.</h2>
+      </div>
+
+      <ul class="notes">
+        <li>
+          <b>Requirements</b>
+          <span>A Mac on macOS 15 or newer with Apple silicon, and an Android 10+ tablet. Built and
+          tested against the OnePlus Pad Go 2. The USB route also needs adb on the Mac; the Wi-Fi
+          route does not.</span>
+        </li>
+        <li>
+          <b>Extended mode</b>
+          <span>Built on a private macOS virtual-display interface. If it is unavailable on your
+          system the menu item is disabled and Mirror mode still works.</span>
+        </li>
+        <li>
+          <b>Wi-Fi security</b>
+          <span>There is no pairing or encryption in this build, so any device on the same network
+          could reach the tablet app while it sits idle. Use it on networks you trust.</span>
+        </li>
+        <li>
+          <b>Tablet app</b>
+          <span>Shipped as a debug build, which is why it installs without a store signature. Keep
+          it in the foreground while sharing; the screen is kept awake for you.</span>
+        </li>
+        <li>
+          <b>Not implemented</b>
+          <span>Audio, clipboard, keyboard forwarding and stylus pressure are reserved in the
+          protocol but not yet built.</span>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="built">Developed by Roopesh &middot; Pacewisdom</div>
+    <div>Version 0.1.0 &middot; <a href="https://github.com/roopesh4p5/OnePLusConnect">Source on GitHub</a></div>
+  </div>
+</footer>
+
+</body>
+</html>
