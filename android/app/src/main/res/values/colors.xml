@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Body colour of logo.png; the adaptive-icon foreground is drawn on the same colour. -->
+    <color name="ic_launcher_background">#454648</color>
+</resources>

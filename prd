@@ -1,0 +1,2567 @@
+# One+Connect
+
+## Wired Android Tablet → Mac Extended Display & Touch System
+
+**Product status:** Technical PRD / Architecture Proposal
+**Target client:** OnePlus Pad Go 2
+**Host:** macOS
+**Transport:** USB-C cable only
+**Wireless:** None
+**Bluetooth:** None
+**Primary modes:** Extended Display + Mirror
+**Primary input:** Tablet touchscreen → Mac
+**Initial default:** 10 Mbps / 60 FPS / adaptive resolution
+
+---
+
+# 1. Product Vision
+
+One+Connect turns the OnePlus Pad Go 2 into a high-performance wired secondary display for a Mac.
+
+The user connects the tablet to the Mac with a USB-C cable, opens One+Connect on both devices, and the tablet becomes:
+
+1. A genuine extended Mac display
+2. A mirrored Mac display
+3. A touch-enabled input surface
+4. Eventually a stylus-enabled input surface
+5. Optionally an audio endpoint
+
+The product must be:
+
+* USB-only
+* Low latency
+* Simple to connect
+* Private
+* Local-only
+* No cloud account
+* No Wi-Fi requirement
+* No Bluetooth requirement
+* No internet requirement
+* Easy to troubleshoot
+* Designed specifically around the OnePlus Pad Go 2 initially
+
+---
+
+# 2. Core Product Principle
+
+The USB cable is the entire connection.
+
+No:
+
+* Wi-Fi discovery
+* Bluetooth pairing
+* cloud relay
+* internet connection
+* LAN connection
+
+The architecture is:
+
+Mac
+↓
+USB-C
+↓
+OnePlus Pad Go 2
+
+The USB connection carries:
+
+* device handshake
+* control messages
+* video
+* touch input
+* optional audio
+* telemetry
+* connection state
+
+---
+
+# 3. Target Hardware
+
+## OnePlus Pad Go 2
+
+Target hardware characteristics:
+
+| Component         | Target                                          |
+| ----------------- | ----------------------------------------------- |
+| Display           | 12.1-inch LCD                                   |
+| Native resolution | 2800 × 1980                                     |
+| Aspect ratio      | 7:5                                             |
+| Refresh           | 60 / 90 / 120 Hz                                |
+| CPU               | MediaTek Dimensity 7300-Ultra                   |
+| RAM               | 8 GB                                            |
+| OS                | Android 16 / OxygenOS 16                        |
+| USB               | USB-C                                           |
+| Battery           | 10,050 mAh                                      |
+| Touch             | Multi-touch                                     |
+| Stylus            | Supported on compatible configuration/accessory |
+
+The native 2800×1980 resolution should be supported eventually, but it should not be the initial streaming resolution.
+
+---
+
+# 4. Target Mac
+
+Initial target:
+
+* Apple Silicon Macs
+* macOS 15+
+* macOS 26/Tahoe testing required
+* Intel Mac support can be considered later
+
+The first engineering target should be Apple Silicon.
+
+Reason:
+
+* predictable VideoToolbox hardware encoding
+* modern macOS APIs
+* better performance
+* easier performance testing
+
+---
+
+# 5. Product Components
+
+One+Connect consists of two applications.
+
+## A. One+Connect Mac
+
+Responsibilities:
+
+* tablet detection
+* USB connection
+* connection management
+* handshake
+* virtual display management
+* screen capture
+* video encoding
+* USB transport
+* touch input handling
+* mouse/gesture injection
+* display configuration
+* settings
+* logs
+* diagnostics
+* session management
+
+---
+
+## B. One+Connect Android
+
+Responsibilities:
+
+* USB connection
+* handshake
+* status display
+* video reception
+* H.264 decoding
+* display rendering
+* touch capture
+* orientation handling
+* input transmission
+* battery/thermal information
+* connection status
+* diagnostics
+
+---
+
+# 6. User Journey
+
+## First launch
+
+### Mac
+
+User installs:
+
+One+Connect.app
+
+The application launches a setup assistant.
+
+It checks:
+
+* macOS version
+* Apple Silicon/Intel
+* Screen Recording permission
+* Accessibility permission
+* required system components
+* USB/ADB availability
+
+---
+
+### Android
+
+User installs:
+
+One+Connect.
+
+First screen:
+
+ONE+CONNECT
+
+"Connect your tablet to your Mac using USB-C."
+
+Then:
+
+USB connection:
+WAITING
+
+USB debugging:
+WAITING
+
+Mac application:
+WAITING
+
+Screen sharing:
+INACTIVE
+
+---
+
+# 7. Tablet Main Screen
+
+The tablet should have a very simple status dashboard.
+
+```text
+ONE+CONNECT
+
+Connection
+
+✓ USB cable
+✓ USB debugging
+✓ Mac connected
+○ Screen sharing
+
+--------------------------------
+
+Tablet
+OnePlus Pad Go 2
+
+2800 × 1980
+120 Hz
+
+--------------------------------
+
+Waiting for Mac...
+
+```
+
+Each state is visually clear.
+
+---
+
+# 8. Connection States
+
+The connection state machine:
+
+```text
+DISCONNECTED
+      ↓
+USB_DETECTED
+      ↓
+DEBUGGER_DETECTED
+      ↓
+APP_DETECTED
+      ↓
+HANDSHAKE
+      ↓
+READY
+      ↓
+STARTING_SESSION
+      ↓
+STREAMING
+      ↓
+PAUSED / RECONNECTING
+      ↓
+DISCONNECTED
+```
+
+Every state should have a timeout and useful error message.
+
+---
+
+# 9. USB Detection
+
+The first version can use Android USB debugging + ADB.
+
+Android requires USB debugging to be enabled for ADB communication over USB.
+
+The Mac application can detect:
+
+```text
+adb devices
+```
+
+Expected:
+
+```text
+XXXXXXXXXXXX    device
+```
+
+If the state is:
+
+```text
+unauthorized
+```
+
+show:
+
+"Allow USB debugging on your tablet."
+
+If:
+
+```text
+offline
+```
+
+show:
+
+"Reconnect the USB cable or restart USB debugging."
+
+---
+
+# 10. USB Transport Strategy
+
+## MVP transport
+
+Use:
+
+ADB port forwarding.
+
+Conceptually:
+
+```text
+Mac
+ |
+ | ADB
+ |
+ +---- USB ----+
+              |
+              Android
+              |
+              One+Connect service
+```
+
+The Mac creates a TCP-like logical channel through ADB.
+
+Example conceptual connection:
+
+```text
+Mac localhost:27183
+        ↓
+ADB forward
+        ↓
+Android localhost:27183
+        ↓
+One+Connect service
+```
+
+This lets us build the application protocol using a reliable byte stream without immediately writing a custom USB driver.
+
+---
+
+# 11. Production Transport
+
+After the MVP works, evaluate moving from ADB to a dedicated USB transport.
+
+Android supports USB accessory/host modes through its USB APIs, including direct communication using USB endpoints.
+
+Potential production architecture:
+
+```text
+Mac USB host
+      ↓
+One+Connect USB protocol
+      ↓
+Android USB accessory
+      ↓
+One+Connect
+```
+
+However, this should be treated as a separate engineering phase.
+
+ADB is not a bad choice for V1 because your intended product already requires USB debugging.
+
+---
+
+# 12. Handshake Protocol
+
+After connection:
+
+```text
+Mac → Tablet
+
+HELLO
+protocol_version
+app_version
+device_id
+capabilities
+```
+
+Tablet:
+
+```text
+HELLO_ACK
+protocol_version
+app_version
+device_model
+resolution
+refresh_rates
+codec_support
+touch_support
+stylus_support
+orientation
+```
+
+Then Mac:
+
+```text
+SESSION_CONFIG
+mode
+width
+height
+fps
+bitrate
+codec
+color_format
+```
+
+Tablet:
+
+```text
+SESSION_READY
+```
+
+Then streaming begins.
+
+---
+
+# 13. Capability Negotiation
+
+Do not hard-code everything.
+
+The tablet should report:
+
+```text
+display_width
+display_height
+
+supported_refresh_rates:
+60
+90
+120
+
+supported_codecs:
+H264
+HEVC (if validated)
+
+touch:
+true
+
+multitouch:
+true
+
+stylus:
+true/false
+
+orientation:
+portrait
+landscape
+```
+
+The Mac chooses the best compatible configuration.
+
+---
+
+# 14. Sharing Modes
+
+The Mac app must expose two modes.
+
+## Mode 1 — Extend
+
+```text
+Mac Display 1
++
+One+Connect Display 2
+```
+
+The tablet becomes a genuine second macOS display.
+
+Windows can be dragged from the Mac display to the tablet.
+
+The display appears in:
+
+System Settings → Displays.
+
+This is the primary product feature.
+
+---
+
+## Mode 2 — Mirror
+
+The tablet displays the selected Mac display.
+
+Possible options:
+
+```text
+Mirror:
+○ Main Mac display
+○ Specific display
+○ Specific window
+```
+
+V1 can simply mirror the primary display.
+
+---
+
+# 15. Extended Display Architecture
+
+The desired architecture:
+
+```text
+macOS
+   |
+   | Virtual Display
+   ↓
+One+Connect Display
+   |
+   | ScreenCaptureKit
+   ↓
+Video frames
+   |
+   | VideoToolbox
+   ↓
+H.264
+   |
+   | USB
+   ↓
+Android
+   |
+   | MediaCodec
+   ↓
+SurfaceView
+   |
+   ↓
+OnePlus display
+```
+
+The virtual display is the most technically sensitive component.
+
+Existing virtual-display implementations use the private `CGVirtualDisplay` family of APIs. There is no straightforward public API for simply creating an arbitrary virtual monitor.
+
+Therefore the PRD should explicitly treat this as a high-risk component.
+
+---
+
+# 16. Virtual Display Requirements
+
+The virtual display must expose:
+
+* Display name: One+Connect
+* Resolution
+* refresh rate
+* HiDPI/scaling mode
+* orientation
+* display ID
+* active/inactive state
+
+Initial modes:
+
+```text
+1920 × 1350 @ 60
+1400 × 990 @ 60
+1280 × 900 @ 60
+```
+
+Later:
+
+```text
+2800 × 1980 @ 60
+2800 × 1980 @ 90
+2800 × 1980 @ 120
+```
+
+120 FPS should only be enabled after measuring the complete end-to-end pipeline.
+
+---
+
+# 17. Resolution Strategy
+
+Do not automatically stream every physical pixel.
+
+Recommended modes:
+
+### Balanced
+
+```text
+1920 × 1350
+60 FPS
+10 Mbps
+```
+
+### Quality
+
+```text
+2240 × 1584
+60 FPS
+15 Mbps
+```
+
+### Native
+
+```text
+2800 × 1980
+60 FPS
+20–25 Mbps
+```
+
+The exact bitrate should be tuned experimentally.
+
+---
+
+# 18. Video Codec
+
+Primary codec:
+
+**H.264**
+
+Reasons:
+
+* mature
+* hardware decode on Android
+* hardware encode on Mac
+* low latency
+* broad compatibility
+* easier debugging
+
+Android's MediaCodec API provides hardware/software codec access and can decode directly to a Surface, avoiding unnecessary frame copies.
+
+---
+
+# 19. Mac Encoder
+
+Use:
+
+VideoToolbox
+
+Specifically:
+
+VTCompressionSession
+
+Configure:
+
+```text
+codec = H.264
+realTime = true
+hardware acceleration = preferred
+B-frames = disabled
+low latency = enabled
+target bitrate = 10 Mbps
+```
+
+Apple's VideoToolbox supports hardware acceleration and low-latency encoding configuration.
+
+---
+
+# 20. Android Decoder
+
+Use:
+
+Android MediaCodec.
+
+Pipeline:
+
+```text
+USB packet
+ ↓
+H.264 NAL units
+ ↓
+MediaCodec
+ ↓
+Surface
+ ↓
+SurfaceView
+```
+
+Prefer Surface-based rendering because Android documents it as more efficient for video decoding than copying decoded frames into buffers.
+
+---
+
+# 21. Frame Transport
+
+Do not treat the video as ordinary TCP application messages without framing.
+
+Use:
+
+```text
+Packet Header
++
+Payload
+```
+
+Example:
+
+```text
+MAGIC
+VERSION
+TYPE
+FLAGS
+SESSION_ID
+SEQUENCE
+TIMESTAMP
+PAYLOAD_LENGTH
+PAYLOAD
+```
+
+Packet types:
+
+```text
+0x01 HELLO
+0x02 HELLO_ACK
+0x03 CONFIG
+0x04 CONFIG_ACK
+
+0x10 VIDEO
+0x11 KEYFRAME
+0x12 VIDEO_CONFIG
+
+0x20 TOUCH
+0x21 GESTURE
+0x22 STYLUS
+
+0x30 PING
+0x31 PONG
+
+0x40 ERROR
+0x41 DISCONNECT
+```
+
+---
+
+# 22. Video Latency Strategy
+
+Do not buffer large amounts of video.
+
+Target:
+
+```text
+Capture
+  ↓
+Encode
+  ↓
+Transport
+  ↓
+Decode
+  ↓
+Display
+```
+
+Target end-to-end:
+
+**<50 ms**
+
+Excellent target:
+
+**20–35 ms**
+
+The system should prefer dropping old frames over building a queue.
+
+If the Android decoder is behind:
+
+```text
+DROP OLD FRAME
+```
+
+rather than:
+
+```text
+WAIT
+```
+
+This is critical for interactive desktop use.
+
+---
+
+# 23. Keyframe Recovery
+
+If packets are lost or the decoder becomes corrupted:
+
+```text
+Android → Mac
+
+REQUEST_KEYFRAME
+```
+
+Mac forces a new IDR/keyframe.
+
+The session recovers without restarting.
+
+---
+
+# 24. Bitrate
+
+Default:
+
+**10 Mbps**
+
+User-visible setting:
+
+```text
+Quality
+
+Automatic
+```
+
+Advanced settings:
+
+```text
+5 Mbps
+8 Mbps
+10 Mbps
+15 Mbps
+20 Mbps
+25 Mbps
+Custom
+```
+
+But the default UI should not overwhelm the user.
+
+---
+
+# 25. Adaptive Bitrate
+
+Later feature.
+
+The Mac measures:
+
+```text
+encode latency
+USB throughput
+packet backlog
+decoder latency
+frame drops
+```
+
+Then adjusts:
+
+```text
+resolution
+bitrate
+frame rate
+```
+
+Example:
+
+```text
+Stable
+↓
+10 Mbps
+
+High frame drops
+↓
+8 Mbps
+
+Still overloaded
+↓
+30 FPS
+```
+
+---
+
+# 26. Frame Rate
+
+Default:
+
+**60 FPS**
+
+Do not default to 120 FPS just because the tablet supports 120 Hz.
+
+The actual chain is:
+
+```text
+Mac display
+→ capture
+→ encode
+→ USB
+→ decode
+→ render
+```
+
+Every component must sustain 120 FPS before 120 Hz becomes useful.
+
+Future:
+
+```text
+30 FPS
+60 FPS
+90 FPS
+120 FPS
+```
+
+---
+
+# 27. Touch Input
+
+This is a first-class feature.
+
+Tablet:
+
+```text
+Touch
+ ↓
+MotionEvent
+ ↓
+One+Connect input encoder
+ ↓
+USB
+ ↓
+Mac
+ ↓
+Input translator
+```
+
+Android's MotionEvent provides pointer IDs, coordinates, pointer count and multi-touch state, making this straightforward on the tablet side.
+
+---
+
+# 28. Touch Mapping — V1
+
+### Single tap
+
+```text
+finger down
+finger up
+```
+
+→ left mouse click
+
+### Single finger drag
+
+```text
+down
+move
+move
+up
+```
+
+→ mouse drag
+
+### Long press
+
+→ right click
+
+### Two finger vertical movement
+
+→ scroll
+
+### Two finger horizontal movement
+
+→ horizontal scroll
+
+### Two finger pinch
+
+→ configurable zoom gesture
+
+---
+
+# 29. Touch Coordinate Mapping
+
+The tablet sends normalized coordinates.
+
+Instead of:
+
+```text
+x = 1732
+y = 924
+```
+
+send:
+
+```text
+x = 0.618
+y = 0.467
+```
+
+Mac converts that into display coordinates.
+
+Advantages:
+
+* resolution independent
+* orientation independent
+* scaling independent
+* works across display modes
+
+---
+
+# 30. Touch + Display Orientation
+
+Tablet orientation must be communicated.
+
+```text
+PORTRAIT
+LANDSCAPE
+REVERSE_PORTRAIT
+REVERSE_LANDSCAPE
+```
+
+When orientation changes:
+
+```text
+Tablet
+ ↓
+ORIENTATION_CHANGED
+ ↓
+Mac
+ ↓
+Reconfigure virtual display
+ ↓
+New video configuration
+```
+
+The display should not require manually restarting One+Connect.
+
+---
+
+# 31. Stylus
+
+The Pad Go 2 family supports stylus functionality on compatible configurations/accessories.
+
+Plan for:
+
+```text
+pressure
+tilt
+x
+y
+tool type
+button state
+```
+
+But stylus support should be Phase 2.
+
+---
+
+# 32. Advanced HID Input
+
+V2 may implement a virtual HID device.
+
+Apple's HIDDriverKit explicitly supports digitizers, pens and touchpads.
+
+Architecture:
+
+```text
+Android Touch
+       ↓
+USB
+       ↓
+One+Connect HID Driver
+       ↓
+macOS HID subsystem
+       ↓
+Applications
+```
+
+This is preferable if we eventually want richer native input semantics.
+
+However:
+
+**V1 should use Accessibility + CGEvent.**
+
+---
+
+# 33. macOS Permissions
+
+One+Connect needs to clearly explain why it needs permissions.
+
+## Screen Recording
+
+Required for ScreenCaptureKit.
+
+macOS will request Screen Recording permission. Apple explicitly requires this permission for screen capture.
+
+---
+
+## Accessibility
+
+Required for touch-to-mouse/event injection.
+
+The Mac app should check:
+
+```text
+AXIsProcessTrusted()
+```
+
+and show setup instructions if unavailable.
+
+---
+
+# 34. First-Run Permission Wizard
+
+Mac:
+
+```text
+Welcome to One+Connect
+
+To provide an extended display,
+One+Connect needs:
+
+✓ Screen Recording
+✓ Accessibility
+
+[ Configure ]
+```
+
+Then:
+
+```text
+Screen Recording
+[ Open System Settings ]
+```
+
+Then:
+
+```text
+Accessibility
+[ Open System Settings ]
+```
+
+Then:
+
+```text
+✓ Screen Recording
+✓ Accessibility
+
+You're ready.
+```
+
+---
+
+# 35. Mac Menu Bar UX
+
+The product should primarily live in the menu bar.
+
+Example:
+
+```text
+◉ One+Connect
+
+OnePlus Pad Go 2
+● Connected
+
+Display
+  Extended
+
+Quality
+  10 Mbps
+
+FPS
+  60
+
+──────────────
+
+Start Sharing
+Stop Sharing
+
+Display Settings
+
+Input Settings
+
+Diagnostics
+
+Preferences
+
+Quit
+```
+
+---
+
+# 36. Connection Status
+
+Use simple states.
+
+### Disconnected
+
+```text
+○ Tablet not connected
+```
+
+### USB connected
+
+```text
+✓ USB connected
+```
+
+### Debugging unavailable
+
+```text
+⚠ USB debugging required
+```
+
+### App detected
+
+```text
+✓ One+Connect detected
+```
+
+### Ready
+
+```text
+✓ Ready to share
+```
+
+### Active
+
+```text
+● Sharing
+```
+
+---
+
+# 37. Tablet Status States
+
+Exactly as originally proposed:
+
+```text
+USB cable
+✓
+
+USB debugging
+✓
+
+Mac application
+✓
+
+Screen sharing
+✓
+```
+
+Add:
+
+```text
+Video stream
+✓
+
+Input channel
+✓
+```
+
+for diagnostic mode.
+
+---
+
+# 38. Error Handling
+
+Every failure should have a human-readable explanation.
+
+Example:
+
+### USB missing
+
+"Connect your OnePlus Pad Go 2 using a USB-C cable."
+
+### USB debugging disabled
+
+"Enable USB debugging in Android Developer Options."
+
+### ADB unauthorized
+
+"Unlock the tablet and allow USB debugging."
+
+### Mac permission missing
+
+"One+Connect needs Screen Recording permission."
+
+### Accessibility missing
+
+"Enable Accessibility permission to use tablet touch input."
+
+### Encoder failure
+
+"Mac video encoder could not start."
+
+### Decoder failure
+
+"Tablet could not decode the selected video format."
+
+### USB disconnected
+
+"USB connection lost. Reconnecting..."
+
+---
+
+# 39. Automatic Reconnection
+
+If the cable momentarily disconnects:
+
+```text
+STREAMING
+   ↓
+CONNECTION LOST
+   ↓
+RECONNECTING...
+   ↓
+HANDSHAKE
+   ↓
+RESTORE SESSION
+```
+
+Do not force the user to restart the application.
+
+---
+
+# 40. Session Recovery
+
+The session should preserve:
+
+* mode
+* resolution
+* FPS
+* bitrate
+* orientation
+* display position
+* input settings
+
+After reconnect:
+
+```text
+restore previous configuration
+```
+
+---
+
+# 41. Audio
+
+Not required for MVP.
+
+Future architecture:
+
+```text
+Mac Audio
+ ↓
+Audio encoder
+ ↓
+USB
+ ↓
+Android AudioTrack
+```
+
+Potential modes:
+
+```text
+Audio Off
+Mac audio → Tablet
+```
+
+Audio should remain separate from the video transport.
+
+---
+
+# 42. Clipboard
+
+Highly useful future feature.
+
+Example:
+
+```text
+Mac copy
+ ↓
+One+Connect
+ ↓
+Tablet clipboard
+```
+
+and:
+
+```text
+Tablet copy
+ ↓
+One+Connect
+ ↓
+Mac clipboard
+```
+
+Make this opt-in.
+
+---
+
+# 43. Keyboard
+
+The tablet itself doesn't need a physical keyboard for V1.
+
+But future versions can support:
+
+```text
+Android keyboard
+ ↓
+USB
+ ↓
+Mac
+```
+
+This is particularly useful if the tablet is being used independently.
+
+---
+
+# 44. Power Management
+
+Important because the tablet is connected for long periods.
+
+The app should display:
+
+```text
+USB connected
+Battery: 74%
+```
+
+The app should prevent the screen from sleeping while active.
+
+Option:
+
+```text
+Keep screen awake while sharing
+✓
+```
+
+---
+
+# 45. Thermal Management
+
+The tablet may decode continuously at 60 FPS.
+
+Monitor:
+
+* device temperature
+* decoder load
+* dropped frames
+* battery drain
+
+If thermal throttling occurs:
+
+```text
+120 Hz
+ ↓
+90 Hz
+ ↓
+60 Hz
+```
+
+and/or:
+
+```text
+10 Mbps
+ ↓
+8 Mbps
+```
+
+---
+
+# 46. Display Rendering
+
+Android rendering target:
+
+```text
+MediaCodec
+     ↓
+SurfaceView
+     ↓
+GPU/display
+```
+
+Android documentation indicates Surface-based video rendering avoids unnecessary raw-frame copying and can improve efficiency.
+
+---
+
+# 47. Fullscreen Mode
+
+The tablet should have no Android UI visible while sharing.
+
+```text
+┌─────────────────────────────────┐
+│                                 │
+│                                 │
+│       MAC SECOND DISPLAY        │
+│                                 │
+│                                 │
+└─────────────────────────────────┘
+```
+
+Optional small overlay:
+
+```text
+USB ●
+60 FPS
+10 Mbps
+```
+
+which disappears after a few seconds.
+
+---
+
+# 48. Exit Sharing
+
+Tablet:
+
+```text
+Swipe / tap menu
+        ↓
+[ Stop Sharing ]
+```
+
+Mac:
+
+```text
+One+Connect
+↓
+Stop Sharing
+```
+
+Either side should terminate the session cleanly.
+
+---
+
+# 49. Display Arrangement
+
+For extend mode:
+
+macOS should treat the virtual display as an ordinary display.
+
+The user should be able to position:
+
+```text
+Mac
+┌──────────────┐
+│              │
+│              │
+└──────────────┘
+       │
+       ▼
+Tablet
+┌──────────────┐
+│              │
+│              │
+└──────────────┘
+```
+
+or:
+
+```text
+┌──────────────┐ ┌──────────────┐
+│     Mac      │ │    Tablet    │
+│              │ │              │
+└──────────────┘ └──────────────┘
+```
+
+---
+
+# 50. Mirror Mode
+
+Mirror should be simpler.
+
+```text
+Mac display
+    ↓
+ScreenCaptureKit
+    ↓
+VideoToolbox
+    ↓
+USB
+    ↓
+Android
+```
+
+No virtual display is necessary.
+
+This makes Mirror the ideal first technical milestone.
+
+---
+
+# 51. Recommended Development Order
+
+## Phase 0 — Hardware validation
+
+Before building the product:
+
+1. OnePlus Pad Go 2
+2. Mac
+3. USB-C to USB-C cable
+4. Enable Developer Options
+5. Enable USB debugging
+6. Confirm ADB connection
+7. Confirm sustained USB connection
+
+---
+
+# 52. Phase 1 — USB Prototype
+
+Build:
+
+Mac CLI
++
+Android test app
+
+Flow:
+
+```text
+Mac
+ ↓
+ADB
+ ↓
+USB
+ ↓
+Android
+```
+
+Send:
+
+```text
+PING
+HELLO
+HELLO_ACK
+```
+
+Then send random binary data.
+
+Measure:
+
+* throughput
+* latency
+* reconnect
+* stability
+
+Do not build display UI yet.
+
+---
+
+# 53. Phase 2 — Video Prototype
+
+Mac:
+
+```text
+ScreenCaptureKit
+ ↓
+VideoToolbox
+ ↓
+H.264
+ ↓
+ADB transport
+```
+
+Android:
+
+```text
+ADB
+ ↓
+MediaCodec
+ ↓
+SurfaceView
+```
+
+Start:
+
+```text
+1280 × 900
+30 FPS
+5 Mbps
+```
+
+Then:
+
+```text
+1920 × 1350
+60 FPS
+10 Mbps
+```
+
+Success criteria:
+
+* stable playback
+* low latency
+* no frame queue growth
+* no visible corruption
+* reconnect works
+
+---
+
+# 54. Phase 3 — Mirror Mode
+
+Once the video pipeline is stable:
+
+```text
+[ Mirror Mac Display ]
+```
+
+This should be the first usable release.
+
+---
+
+# 55. Phase 4 — Touch
+
+Implement:
+
+```text
+Tap
+Drag
+Right click
+Scroll
+Pinch
+```
+
+First using:
+
+```text
+CGEvent
++
+Accessibility
+```
+
+Do not build HIDDriverKit yet.
+
+---
+
+# 56. Phase 5 — Virtual Display
+
+Create:
+
+```text
+One+Connect Display
+```
+
+Test:
+
+```text
+System Settings
+ → Displays
+```
+
+Expected:
+
+```text
+One+Connect
+1920 × 1350
+60 Hz
+```
+
+Then:
+
+```text
+Move window
+      ↓
+One+Connect
+      ↓
+Capture
+      ↓
+USB
+      ↓
+Tablet
+```
+
+This is the moment the project becomes a true second-monitor product.
+
+---
+
+# 57. Phase 6 — Display Management
+
+Implement:
+
+* resolution
+* refresh rate
+* orientation
+* HiDPI
+* display position
+* reconnect
+* display destruction
+* display recreation
+
+---
+
+# 58. Phase 7 — Production Transport
+
+Only after the ADB implementation is stable:
+
+Investigate:
+
+```text
+ADB transport
+       ↓
+Dedicated USB protocol
+```
+
+Android's official USB accessory APIs support communication between Android and an external USB host/accessory, so this is a technically valid direction.
+
+---
+
+# 59. Phase 8 — Advanced Input
+
+Add:
+
+* stylus
+* pressure
+* tilt
+* better gestures
+* virtual HID digitizer
+
+This is where DriverKit/HIDDriverKit becomes relevant.
+
+---
+
+# 60. Phase 9 — Quality Features
+
+Add:
+
+* adaptive bitrate
+* 90/120 FPS
+* native 2800×1980
+* audio
+* clipboard
+* keyboard forwarding
+* diagnostics
+* crash recovery
+* thermal adaptation
+
+---
+
+# 61. Performance Targets
+
+## V1
+
+| Metric                   |    Target |
+| ------------------------ | --------: |
+| Resolution               | 1920×1350 |
+| FPS                      |        60 |
+| Bitrate                  |   10 Mbps |
+| Codec                    |     H.264 |
+| Connection               |       USB |
+| Wireless                 |      None |
+| End-to-end latency       |    <50 ms |
+| Target excellent latency |    <35 ms |
+| Reconnect                | Automatic |
+| Touch                    |       Yes |
+| Mirror                   |       Yes |
+| Extend                   |       Yes |
+
+---
+
+# 62. Quality Modes
+
+### Battery Saver
+
+```text
+1280×900
+30 FPS
+5 Mbps
+```
+
+### Balanced — Default
+
+```text
+1920×1350
+60 FPS
+10 Mbps
+```
+
+### Quality
+
+```text
+2240×1584
+60 FPS
+15 Mbps
+```
+
+### Native
+
+```text
+2800×1980
+60 FPS
+20–25 Mbps
+```
+
+Native mode should remain experimental until validated.
+
+---
+
+# 63. Diagnostics
+
+The Mac app should have:
+
+```text
+Diagnostics
+
+USB
+✓ Connected
+
+Transport
+✓ Stable
+
+Throughput
+10.8 Mbps
+
+Video
+60 FPS
+
+Encode latency
+4.2 ms
+
+Decode latency
+6.1 ms
+
+Dropped frames
+0.2%
+
+Input latency
+8 ms
+
+Session latency
+28 ms
+```
+
+This will be extremely useful during development.
+
+---
+
+# 64. Debug Log
+
+Local logs only.
+
+Example:
+
+```text
+14:32:01 USB device detected
+14:32:02 ADB authorized
+14:32:02 One+Connect handshake started
+14:32:02 Tablet: OnePlus Pad Go 2
+14:32:02 Resolution: 2800x1980
+14:32:03 Session configured
+14:32:03 Encoder started
+14:32:03 Streaming started
+14:32:05 Touch channel active
+```
+
+No cloud logging by default.
+
+---
+
+# 65. Security
+
+The product should not require internet access.
+
+Security model:
+
+```text
+Mac
+ ↕
+USB
+ ↕
+Tablet
+```
+
+No external server.
+
+For the ADB prototype, rely on Android's USB-debugging authorization.
+
+For a future custom transport, implement:
+
+* device identity
+* session nonce
+* authenticated handshake
+* optional encryption
+* replay protection
+
+Even though the cable is physical, encryption is still desirable.
+
+---
+
+# 66. Privacy
+
+One+Connect should clearly state:
+
+"Your display data is transmitted directly between your Mac and tablet over USB. One+Connect does not require cloud servers."
+
+No:
+
+* analytics by default
+* screen uploads
+* cloud recording
+* remote access
+* internet dependency
+
+---
+
+# 67. Installer
+
+Mac installer:
+
+```text
+One+Connect.dmg
+
+One+Connect.app
+```
+
+First launch:
+
+```text
+Install required system components
+```
+
+Potential system component:
+
+```text
+One+Connect Display Extension / Driver
+```
+
+depending on final virtual-display architecture.
+
+---
+
+# 68. macOS Distribution Strategy
+
+This is an important product decision.
+
+If the implementation depends on private `CGVirtualDisplay` APIs, Mac App Store distribution becomes problematic. Existing open-source virtual-display projects explicitly document this limitation.
+
+Therefore initial distribution should likely be:
+
+```text
+Signed
++
+Notarized
++
+Direct DMG download
+```
+
+rather than Mac App Store.
+
+Long-term, investigate a supported DriverKit architecture.
+
+---
+
+# 69. Tablet Application Architecture
+
+Recommended Android stack:
+
+```text
+Kotlin
+Jetpack Compose
+Android USB APIs
+MediaCodec
+SurfaceView
+Coroutines
+```
+
+Modules:
+
+```text
+app
+ ├── ui
+ ├── connection
+ ├── usb
+ ├── protocol
+ ├── video
+ ├── input
+ ├── diagnostics
+ └── settings
+```
+
+---
+
+# 70. Mac Application Architecture
+
+Recommended:
+
+```text
+Swift
+SwiftUI
+AppKit
+ScreenCaptureKit
+VideoToolbox
+CoreGraphics
+Accessibility APIs
+CoreFoundation
+IOKit / DriverKit where necessary
+```
+
+Modules:
+
+```text
+OnePlusConnect
+ ├── UI
+ ├── Connection
+ ├── ADBTransport
+ ├── Protocol
+ ├── Display
+ ├── Capture
+ ├── Encoder
+ ├── Input
+ ├── Diagnostics
+ └── Preferences
+```
+
+---
+
+# 71. Core Mac Services
+
+### ConnectionManager
+
+Responsible for:
+
+* ADB detection
+* connection
+* disconnect
+* reconnect
+
+### SessionManager
+
+Responsible for:
+
+* session lifecycle
+* state machine
+* configuration
+
+### DisplayManager
+
+Responsible for:
+
+* virtual display
+* resolution
+* refresh rate
+* orientation
+
+### CaptureManager
+
+Responsible for:
+
+* ScreenCaptureKit
+
+### Encoder
+
+Responsible for:
+
+* H.264
+* bitrate
+* FPS
+* keyframes
+
+### InputManager
+
+Responsible for:
+
+* touch
+* gestures
+* CGEvent
+
+---
+
+# 72. Android Core Services
+
+### ConnectionService
+
+USB/ADB connection.
+
+### ProtocolService
+
+Packet parsing.
+
+### VideoService
+
+H.264 receiving.
+
+### DecoderService
+
+MediaCodec.
+
+### DisplayRenderer
+
+SurfaceView.
+
+### InputService
+
+MotionEvent capture.
+
+### DiagnosticsService
+
+FPS/latency/drop reporting.
+
+---
+
+# 73. Important Product Decision
+
+Do not make the Android app look like a generic remote-desktop application.
+
+It should feel like:
+
+**"My tablet is now a monitor."**
+
+So when active:
+
+No Android navigation UI.
+
+No unnecessary buttons.
+
+No chat/remote-desktop UI.
+
+No cloud account.
+
+Just the Mac display.
+
+---
+
+# 74. Ideal User Experience
+
+The final user experience should be:
+
+```text
+1. Plug USB-C cable
+
+        ↓
+
+2. Open One+Connect
+
+        ↓
+
+3. Tablet says:
+
+   ✓ USB
+   ✓ Debugging
+   ✓ Mac connected
+
+        ↓
+
+4. Mac menu bar says:
+
+   OnePlus Pad Go 2
+   ● Ready
+
+        ↓
+
+5. Click Start Sharing
+
+        ↓
+
+6. Choose:
+
+   Extend
+   Mirror
+
+        ↓
+
+7. Start
+
+        ↓
+
+8. Tablet becomes display
+
+        ↓
+
+9. Touch tablet
+
+        ↓
+
+10. Mac responds
+```
+
+That should be the entire mental model.
+
+---
+
+# 75. MVP Definition
+
+The first real milestone should NOT be "fully featured."
+
+MVP =
+
+```text
+USB-C
++
+ADB
++
+Mac
++
+Android
++
+H.264
++
+1920×1350
++
+60 FPS
++
+10 Mbps
++
+Mirror
++
+Touch → mouse
+```
+
+If this works well, the project is viable.
+
+---
+
+# 76. V1 Definition
+
+Then:
+
+```text
+Everything in MVP
+
++
+
+True extended display
++
+Display arrangement
++
+60 FPS
++
+1920×1350
++
+Auto reconnect
++
+Orientation
++
+Right click
++
+Two-finger scrolling
++
+Diagnostics
++
+Signed/notarized Mac app
+```
+
+---
+
+# 77. V1.5
+
+```text
+2800×1980
+90/120 Hz
+15–25 Mbps
+Adaptive bitrate
+Stylus
+Clipboard
+Keyboard
+Audio
+Better gestures
+```
+
+---
+
+# 78. V2
+
+```text
+Custom USB transport
++
+Virtual HID
++
+Native stylus
++
+Advanced touch
++
+DriverKit investigation
++
+Multiple tablets
++
+Multiple virtual displays
+```
+
+---
+
+# 79. Biggest Technical Risks
+
+## Risk 1 — Virtual display
+
+**Severity: Critical**
+
+Private API / DriverKit complexity.
+
+Mitigation:
+
+Prototype virtual display first.
+
+---
+
+## Risk 2 — USB transport
+
+**Severity: Medium**
+
+ADB makes V1 relatively easy.
+
+Mitigation:
+
+Do not build custom USB transport first.
+
+---
+
+## Risk 3 — Latency
+
+**Severity: High**
+
+Encoding + USB + decoding + rendering can introduce lag.
+
+Mitigation:
+
+Hardware H.264, no B-frames, tiny buffers, frame dropping.
+
+---
+
+## Risk 4 — Touch
+
+**Severity: Medium**
+
+Basic touch-to-pointer is straightforward.
+
+Native HID touch is considerably harder.
+
+Mitigation:
+
+CGEvent first, HIDDriverKit later.
+
+---
+
+## Risk 5 — 120 FPS
+
+**Severity: Medium/High**
+
+The panel supports 120 Hz, but the entire pipeline must support it.
+
+Mitigation:
+
+Start at 60 FPS.
+
+---
+
+## Risk 6 — macOS updates
+
+**Severity: High if using private APIs**
+
+Apple could change private virtual-display APIs.
+
+Mitigation:
+
+Abstract DisplayManager so the backend can eventually be replaced by DriverKit.
+
+---
+
+# 80. The Most Important Architectural Rule
+
+The application should never know that the display is "the OnePlus Pad Go 2" deep inside the rendering system.
+
+Instead:
+
+```text
+DisplayBackend
+     ↓
+OnePlusPadBackend
+```
+
+Later:
+
+```text
+DisplayBackend
+ ├── OnePlusPad
+ ├── AndroidTablet
+ ├── iPad
+ └── OtherDevice
+```
+
+Likewise:
+
+```text
+Transport
+ ├── ADBTransport
+ └── USBAccessoryTransport
+```
+
+And:
+
+```text
+Input
+ ├── CGEventInput
+ └── HIDInput
+```
+
+This means we can replace individual pieces without rewriting the entire application.
+
+---
+
+# 81. Final Architecture
+
+```text
+                         MAC
+ ┌──────────────────────────────────────────────┐
+ │                                              │
+ │              One+Connect.app                 │
+ │                                              │
+ │  ┌──────────────┐      ┌─────────────────┐  │
+ │  │ Menu Bar UI  │      │ Session Manager │  │
+ │  └──────────────┘      └────────┬────────┘  │
+ │                                  │           │
+ │       ┌──────────────────────────┼────────┐  │
+ │       │                          │        │  │
+ │       ▼                          ▼        ▼  │
+ │ Display Manager            Capture     Input │
+ │       │                     Manager    Manager│
+ │       │                         │        │  │
+ │       ▼                         ▼        │  │
+ │ Virtual Display           VideoToolbox   │  │
+ │       │                         │        │  │
+ │       └─────────────────────────┼────────┘  │
+ │                                 │           │
+ │                         One+Connect Protocol│
+ │                                 │           │
+ │                         ADB/USB Transport   │
+ └─────────────────────────────────┼───────────┘
+                                   │
+                              USB-C cable
+                                   │
+ ┌─────────────────────────────────▼───────────┐
+ │              ONEPLUS PAD GO 2               │
+ │                                             │
+ │              One+Connect App                │
+ │                                             │
+ │   USB → Protocol → H.264 → MediaCodec       │
+ │                              ↓              │
+ │                          SurfaceView         │
+ │                              ↓              │
+ │                        2800×1980 LCD        │
+ │                                             │
+ │   Touch → MotionEvent → Protocol → USB      │
+ │                                             │
+ └─────────────────────────────────────────────┘
+```
+
+---
+
+# 82. Product Definition in One Sentence
+
+**One+Connect is a USB-C-only Mac companion that makes a OnePlus Pad Go 2 behave like a real second Mac display, with low-latency H.264 streaming and tablet touch mapped back to the Mac.**
+
+---
+
+# 83. Engineering Priority
+
+The order I would personally follow is:
+
+**#1 — Prove USB transport**
+
+**#2 — Prove Mac → Android H.264 at 60 FPS**
+
+**#3 — Prove touch → Mac**
+
+**#4 — Prove virtual display**
+
+**#5 — Combine them**
+
+**#6 — Optimize**
+
+**#7 — Add 120 Hz / native resolution / stylus / audio**
+
+Do **not** spend weeks polishing the splash screen before #1–#4 are proven.
+
+The beautiful UI is relatively easy.
+
+The actual product-defining engineering is:
+
+```text
+Virtual Display
+       +
+Low-latency Video
+       +
+USB Transport
+       +
+Touch Input
+```
+
+That is the One+Connect core.
