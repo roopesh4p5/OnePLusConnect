@@ -75,7 +75,8 @@ object DeviceInfo {
             stylus = hasStylus(),
             orientation = orientation(context),
             densityDpi = context.resources.configuration.densityDpi,
-            maxFpsAtNative = VideoDecoder.maxFrameRateFor(maxOf(w, h), minOf(w, h)),
+            maxFpsAtNative = VideoDecoder.maxFrameRateFor(maxOf(w, h), minOf(w, h), VideoDecoder.MIME_H264),
+            maxFpsAtNativeHevc = VideoDecoder.maxFrameRateFor(maxOf(w, h), minOf(w, h), VideoDecoder.MIME_HEVC),
         )
     }
 

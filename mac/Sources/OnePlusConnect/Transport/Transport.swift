@@ -52,9 +52,12 @@ final class TCPTransport: Transport {
             tcp.noDelay = true
             tcp.connectionTimeout = 4
         }
-        // Wi-Fi only: never let the tablet link wander onto cellular/VPN interfaces, and keep it IPv4.
+        // Wi-Fi only: never let the tablet link wander onto cellular/VPN interfaces, keep it IPv4, and
+        // mark it as interactive video so the Wi-Fi radio puts it in the video access class (AC_VI)
+        // instead of queueing it behind ordinary background traffic.
         if host != "127.0.0.1" {
             params.prohibitedInterfaceTypes = [.cellular]
+            params.serviceClass = .interactiveVideo
             if let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options { ip.version = .v4 }
         }
         let conn = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port) ?? 27183, using: params)

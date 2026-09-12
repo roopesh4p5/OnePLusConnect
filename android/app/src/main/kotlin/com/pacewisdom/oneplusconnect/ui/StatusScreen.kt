@@ -93,7 +93,7 @@ fun StatusScreen(state: ConnectionEngine.UiState) {
             }
             Spacer(Modifier.height(28.dp))
             Text(
-                "Your display data is transmitted directly between your Mac and tablet over USB-C, or over your own Wi-Fi network when no cable is connected. One+Connect does not use cloud servers.",
+                "Your display data is transmitted directly between your Mac and tablet over USB-C or over your own Wi-Fi network — you choose which on the Mac. One+Connect does not use cloud servers.",
                 color = Color.Gray, fontSize = 12.sp,
             )
 

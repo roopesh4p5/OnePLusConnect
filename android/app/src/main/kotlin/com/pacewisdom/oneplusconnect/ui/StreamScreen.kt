@@ -98,6 +98,8 @@ fun StreamScreen(engine: ConnectionEngine, state: ConnectionEngine.UiState) {
                     Spacer(Modifier.width(12.dp))
                     Text("${cfg.fps} FPS", color = Color.LightGray, fontSize = 13.sp)
                     Spacer(Modifier.width(12.dp))
+                    Text(if (cfg.codec.equals("hevc", true)) "HEVC" else "H.264", color = Color.LightGray, fontSize = 13.sp)
+                    Spacer(Modifier.width(12.dp))
                     Text("${cfg.bitrateMbps} Mbps", color = Color.LightGray, fontSize = 13.sp)
                 }
                 if (state.stats.rendered > 0) {

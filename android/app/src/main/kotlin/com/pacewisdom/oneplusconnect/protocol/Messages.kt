@@ -29,8 +29,9 @@ object Messages {
         val stylus: Boolean,
         val orientation: String,
         val densityDpi: Int,
-        /** Max decodable fps at the panel's native size (0 = unknown). */
+        /** Max decodable fps at the panel's native size, per codec (0 = unknown). */
         val maxFpsAtNative: Int = 0,
+        val maxFpsAtNativeHevc: Int = 0,
     )
 
     fun helloAck(c: DeviceCapabilities, appVersion: String): ByteArray = JSONObject().apply {
@@ -49,6 +50,7 @@ object Messages {
         put("orientation", c.orientation)
         put("densityDpi", c.densityDpi)
         if (c.maxFpsAtNative > 0) put("maxFpsAtNative", c.maxFpsAtNative)
+        if (c.maxFpsAtNativeHevc > 0) put("maxFpsAtNativeHevc", c.maxFpsAtNativeHevc)
     }.bytes()
 
     data class SessionConfig(

@@ -15,8 +15,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * H.264 Annex B → MediaCodec → Surface, tuned for latency:
+ * H.264 / HEVC Annex B → MediaCodec → Surface, tuned for latency:
  * tiny input queue, drop-and-request-keyframe instead of buffering, render immediately.
+ * The codec comes from SESSION_CONFIG; HEVC is preferred because it carries the same picture in
+ * about half the bits, which is what keeps a Wi-Fi link as sharp as the cable.
  */
 class VideoDecoder(private val listener: Listener) {
 
@@ -39,31 +41,37 @@ class VideoDecoder(private val listener: Listener) {
 
     companion object {
         private const val TAG = "VideoDecoder"
-        const val MIME = "video/avc"
+        const val MIME_H264 = "video/avc"
+        const val MIME_HEVC = "video/hevc"
         private const val QUEUE_CAPACITY = 6
 
-        fun isHardwareDecoderAvailable(): Boolean = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
-            !info.isEncoder && info.supportedTypes.any { it.equals(MIME, ignoreCase = true) }
-        }
+        /** SESSION_CONFIG codec name ("h264"/"hevc") → MediaCodec MIME type. */
+        fun mimeFor(codec: String): String =
+            if (codec.equals("hevc", true) || codec.equals("h265", true)) MIME_HEVC else MIME_H264
+
+        fun isHardwareDecoderAvailable(mime: String = MIME_H264): Boolean =
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+                !info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) }
+            }
 
         fun supportedDecoderMimes(): List<String> {
-            val wanted = listOf("video/avc" to "h264", "video/hevc" to "hevc")
+            val wanted = listOf(MIME_H264 to "h264", MIME_HEVC to "hevc")
             val infos = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
             return wanted.filter { (mime, _) -> infos.any { !it.isEncoder && it.supportedTypes.any { t -> t.equals(mime, true) } } }
                 .map { it.second }
         }
 
         /**
-         * Highest frame rate the hardware H.264 decoder advertises for a [w]x[h] stream,
+         * Highest frame rate the hardware [mime] decoder advertises for a [w]x[h] stream,
          * or 0 when the size itself is unsupported / unknown. Sent in HELLO_ACK so the Mac
          * can keep native-resolution streams within what this tablet can actually decode.
          */
-        fun maxFrameRateFor(w: Int, h: Int): Int = runCatching {
+        fun maxFrameRateFor(w: Int, h: Int, mime: String = MIME_H264): Int = runCatching {
             MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-                .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(MIME, true) } }
+                .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(mime, true) } }
                 .sortedBy { it.name.contains("google", true) || it.name.contains(".sw", true) } // hardware first
                 .mapNotNull { info ->
-                    val vc = info.getCapabilitiesForType(MIME).videoCapabilities ?: return@mapNotNull null
+                    val vc = info.getCapabilitiesForType(mime).videoCapabilities ?: return@mapNotNull null
                     if (!vc.isSizeSupported(w, h)) return@mapNotNull null
                     vc.getSupportedFrameRatesFor(w, h).upper.toInt()
                 }
@@ -99,8 +107,10 @@ class VideoDecoder(private val listener: Listener) {
     @Volatile private var surface: Surface? = null
     @Volatile private var width = 0
     @Volatile private var height = 0
-    private var sps: ByteArray? = null
-    private var pps: ByteArray? = null
+    @Volatile private var mime = MIME_H264
+    // Codec-specific config buffers: H.264 → csd-0 = SPS, csd-1 = PPS; HEVC → csd-0 = VPS+SPS+PPS.
+    private var csd0: ByteArray? = null
+    private var csd1: ByteArray? = null
 
     private var codec: MediaCodec? = null
     private var inputThread: Thread? = null
@@ -137,26 +147,55 @@ class VideoDecoder(private val listener: Listener) {
             // A new size needs new parameter sets; the Mac sends them with the next keyframe.
             if (running) {
                 stopLocked()
-                sps = null; pps = null
+                csd0 = null; csd1 = null
             }
         }
     }
 
-    /** Annex B SPS+PPS from a VIDEO_CONFIG packet. */
+    /** Codec for the next session ("h264"/"hevc"); a change restarts the decoder on the next keyframe. */
+    fun setCodec(codec: String) {
+        synchronized(lock) {
+            val m = mimeFor(codec)
+            if (m == mime) return
+            mime = m
+            Log.i(TAG, "Codec set to $m")
+            if (running) stopLocked()
+            csd0 = null; csd1 = null
+        }
+    }
+
+    /** Annex B parameter sets from a VIDEO_CONFIG packet: SPS+PPS (H.264) or VPS+SPS+PPS (HEVC). */
     fun setParameterSets(annexB: ByteArray) {
         synchronized(lock) {
-            var newSps: ByteArray? = null
-            var newPps: ByteArray? = null
-            for (nal in splitNals(annexB)) {
-                if (nal.isEmpty()) continue
-                when (nal[0].toInt() and 0x1F) {
-                    7 -> newSps = nal
-                    8 -> newPps = nal
+            val nals = splitNals(annexB).filter { it.isNotEmpty() }
+            var newCsd0: ByteArray? = null
+            var newCsd1: ByteArray? = null
+            if (mime == MIME_HEVC) {
+                // HEVC wants all three sets concatenated in csd-0, in VPS, SPS, PPS order.
+                var vps: ByteArray? = null; var sps: ByteArray? = null; var pps: ByteArray? = null
+                for (nal in nals) {
+                    when ((nal[0].toInt() and 0xFF) shr 1 and 0x3F) {
+                        32 -> vps = nal
+                        33 -> sps = nal
+                        34 -> pps = nal
+                    }
                 }
+                if (vps == null || sps == null || pps == null) return
+                newCsd0 = START_CODE + vps + START_CODE + sps + START_CODE + pps
+            } else {
+                var sps: ByteArray? = null; var pps: ByteArray? = null
+                for (nal in nals) {
+                    when (nal[0].toInt() and 0x1F) {
+                        7 -> sps = nal
+                        8 -> pps = nal
+                    }
+                }
+                if (sps == null || pps == null) return
+                newCsd0 = START_CODE + sps
+                newCsd1 = START_CODE + pps
             }
-            if (newSps == null || newPps == null) return
-            val changed = !newSps.contentEquals(sps) || !newPps.contentEquals(pps)
-            sps = newSps; pps = newPps
+            val changed = !newCsd0.contentEquals(csd0) || !newCsd1.contentEquals(csd1)
+            csd0 = newCsd0; csd1 = newCsd1
             if (changed && running) {
                 Log.i(TAG, "Parameter sets changed; restarting decoder")
                 stopLocked()
@@ -194,18 +233,18 @@ class VideoDecoder(private val listener: Listener) {
 
     private fun maybeStartLocked() {
         val s = surface ?: return
-        val spsBytes = sps ?: return
-        val ppsBytes = pps ?: return
+        val config0 = csd0 ?: return
+        if (mime == MIME_H264 && csd1 == null) return
         if (running || width == 0 || height == 0) return
         try {
-            val format = MediaFormat.createVideoFormat(MIME, width, height).apply {
-                setByteBuffer("csd-0", ByteBuffer.wrap(START_CODE + spsBytes))
-                setByteBuffer("csd-1", ByteBuffer.wrap(START_CODE + ppsBytes))
+            val format = MediaFormat.createVideoFormat(mime, width, height).apply {
+                setByteBuffer("csd-0", ByteBuffer.wrap(config0))
+                csd1?.let { setByteBuffer("csd-1", ByteBuffer.wrap(it)) }
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, width * height)
                 if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
                 setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
             }
-            val c = MediaCodec.createDecoderByType(MIME)
+            val c = MediaCodec.createDecoderByType(mime)
             c.configure(format, s, null, 0)
             c.start()
             codec = c
@@ -216,7 +255,7 @@ class VideoDecoder(private val listener: Listener) {
             enqueueTimes.clear()
             inputThread = Thread({ inputLoop(c) }, "opc-decoder-in").apply { priority = Thread.MAX_PRIORITY; start() }
             outputThread = Thread({ outputLoop(c) }, "opc-decoder-out").apply { priority = Thread.MAX_PRIORITY; start() }
-            Log.i(TAG, "Decoder started ${width}x$height on ${c.name} (max ${maxFrameRateFor(width, height)} fps at this size)")
+            Log.i(TAG, "Decoder started $mime ${width}x$height on ${c.name} (max ${maxFrameRateFor(width, height, mime)} fps at this size)")
             listener.onRequestKeyframe()
         } catch (e: Exception) {
             Log.e(TAG, "Decoder start failed", e)
@@ -303,7 +342,7 @@ class VideoDecoder(private val listener: Listener) {
     fun release() {
         synchronized(lock) {
             stopLocked()
-            sps = null; pps = null
+            csd0 = null; csd1 = null
             width = 0; height = 0
         }
     }

@@ -21,7 +21,7 @@ struct TabletEndpoint: Equatable {
     var linkDescription: String { kind == .usb ? "USB" : "Wi-Fi \(host)" }
 }
 
-/// Connection state machine (PRD §8 / §36), extended with the Wi-Fi fallback.
+/// Connection state machine (PRD §8 / §36), extended with the Wi-Fi link.
 enum ConnectionState: Equatable {
     case disconnected(message: String)                          // no USB device and no tablet on Wi-Fi
     case usbDetected(message: String)                           // adb sees the device but it is unauthorized/offline
@@ -77,14 +77,16 @@ enum ConnectionState: Equatable {
     }
 }
 
-/// Owns link selection (USB first, Wi-Fi fallback), the transport, the HELLO handshake and keepalive.
+/// Owns link selection, the transport, the HELLO handshake and keepalive.
 /// Non-handshake packets are forwarded to `packetHandler` (the SessionManager).
 ///
-/// Link policy, evaluated every poll while no link is up:
-///   if adb reports an authorized tablet over the cable → connect through `adb forward` (USB)
-///   else if Wi-Fi fallback is enabled and a tablet is announcing itself (or a manual address is set) → connect over Wi-Fi
-///   else → wait, telling the user what is missing.
-/// While a Wi-Fi link is idle (no sharing session) and a cable shows up, the link is moved to USB.
+/// Link policy follows `Preferences.linkMode`, which is a *choice*, not a fallback order:
+///   .usb   → only the cable is ever used; the network is never touched.
+///   .wifi  → only the network is used, even while a cable is plugged in.
+///   .auto  → prefer the cable, use Wi-Fi when no authorized tablet is on USB, and move an idle
+///            Wi-Fi link back to USB when a cable appears.
+/// Changing the mode takes effect immediately: `refreshLinkPreferences()` drops a link that the
+/// new mode forbids and the poll loop dials the other one.
 final class ConnectionManager {
     static let appVersion = "0.1.0"
     static let protocolVersion = 1
@@ -125,7 +127,8 @@ final class ConnectionManager {
     private var lostKind: LinkKind = .usb
     private var sequence: UInt32 = 0
     private var forwardedSerial: String?
-    private var switchingToUSB = false
+    /// Link we are deliberately moving to; suppresses the "connection lost" path on close.
+    private var switchingLink: LinkKind?
     private var pollCount = 0
     /// Last Wi-Fi endpoint that completed a handshake; retried after a drop even if beacons are late.
     private var lastWiFiEndpoint: TabletEndpoint?
@@ -177,12 +180,22 @@ final class ConnectionManager {
         queue.async { self.locateADB() }
     }
 
-    /// Call after the Wi-Fi preferences change (enable/disable, ports, manual address).
-    func refreshWiFiPreferences() {
+    /// Call after the link preferences change (mode, ports, manual address).
+    /// A link the new mode forbids is dropped at once, so switching USB ⇄ Wi-Fi is immediate.
+    func refreshLinkPreferences() {
         queue.async {
             self.applyDiscoveryPreference()
-            // A manual address change should take effect without waiting for the current attempt to die.
-            if let ep = self.currentEndpoint, ep.kind == .wifi, !self.state.isReady { self.transport?.close() }
+            let mode = Preferences.shared.linkMode
+            if let ep = self.currentEndpoint {
+                if let forced = mode.forcedKind, forced != ep.kind {
+                    Log.shared.info("Link mode set to \(mode.shortTitle); leaving the \(ep.kind.title) link.")
+                    self.switchingLink = forced
+                    self.transport?.close()
+                } else if ep.kind == .wifi, !self.state.isReady {
+                    // A manual address change should take effect without waiting for the current attempt to die.
+                    self.transport?.close()
+                }
+            }
         }
     }
 
@@ -239,27 +252,42 @@ final class ConnectionManager {
 
     private func poll() {
         pollCount &+= 1
+        let mode = Preferences.shared.linkMode
 
-        // While a transport is alive, the keepalive owns liveness. The only job here is to
-        // prefer the cable: an idle Wi-Fi link moves to USB as soon as an authorized tablet appears.
+        // While a transport is alive, the keepalive owns liveness. The only job here is to honour
+        // the link choice: leave a link the mode forbids, and in .auto move an idle Wi-Fi link to USB.
         if transport != nil {
-            if let ep = currentEndpoint, ep.kind == .wifi, pollCount % 3 == 0, isSessionActive?() != true,
-               case .authorized(let dev) = probeUSB() {
+            guard let ep = currentEndpoint else { return }
+            if let forced = mode.forcedKind, forced != ep.kind {
+                Log.shared.info("Link mode is \(mode.shortTitle); leaving the \(ep.kind.title) link.")
+                switchingLink = forced
+                transport?.close()
+            } else if mode == .auto, ep.kind == .wifi, pollCount % 3 == 0, isSessionActive?() != true,
+                      case .authorized(let dev) = probeUSB() {
                 Log.shared.info("USB cable detected (\(dev.displayName)); moving the link from Wi-Fi to USB.")
-                switchingToUSB = true
+                switchingLink = .usb
                 transport?.close()
             }
             return
         }
 
-        // ---- if: wired tablet detected → USB ----
+        // ---- Wi-Fi only: the cable is ignored on purpose, so adb is never even asked. ----
+        if mode == .wifi {
+            if let endpoint = wifiCandidate() {
+                connectWiFi(endpoint)
+            } else {
+                setState(reconnectingOr(.disconnected(message: "Wi-Fi is selected in One+Connect. Open One+Connect on the tablet and keep it on the same network as this Mac\(Preferences.shared.wifiManualHost.isEmpty ? "" : " (looking for \(Preferences.shared.wifiManualHost))").")))
+            }
+            return
+        }
+
+        // ---- Cable first ----
         let probe = probeUSB()
         if case .authorized(let device) = probe {
             connectUSB(device)
             return
         }
 
-        // ---- else: fall back to Wi-Fi ----
         let usbHint: String
         switch probe {
         case .noADB(let m): usbHint = m
@@ -267,18 +295,20 @@ final class ConnectionManager {
         case .none, .authorized: usbHint = ""
         }
 
-        if Preferences.shared.wifiEnabled, let endpoint = wifiCandidate() {
+        // ---- .auto: no cable, so try the network ----
+        if mode == .auto, let endpoint = wifiCandidate() {
             connectWiFi(endpoint)
             return
         }
 
         // Nothing to connect to yet: explain what is missing.
+        let wifiAllowed = mode == .auto
         if case .blocked(let m) = probe {
-            setState(reconnectingOr(.usbDetected(message: m + (Preferences.shared.wifiEnabled ? " (or use Wi-Fi: open One+Connect on the tablet on the same network)" : ""))))
-        } else if !usbHint.isEmpty && !Preferences.shared.wifiEnabled {
+            setState(reconnectingOr(.usbDetected(message: m + (wifiAllowed ? " (or use Wi-Fi: open One+Connect on the tablet on the same network)" : ""))))
+        } else if !usbHint.isEmpty && !wifiAllowed {
             setState(.disconnected(message: usbHint))
-        } else if !Preferences.shared.wifiEnabled {
-            setState(reconnectingOr(.disconnected(message: "Connect your OnePlus Pad Go 2 using a USB-C cable.")))
+        } else if !wifiAllowed {
+            setState(reconnectingOr(.disconnected(message: "USB is selected in One+Connect. Connect your OnePlus Pad Go 2 using a USB-C cable.")))
         } else {
             let hint = usbHint.isEmpty ? "" : " (USB: \(usbHint))"
             setState(reconnectingOr(.disconnected(message: ConnectionManager.noTabletMessage + hint)))
@@ -378,9 +408,9 @@ final class ConnectionManager {
             currentEndpoint = nil
             handshakeDeadline?.cancel(); handshakeDeadline = nil
             keepaliveTimer?.cancel(); keepaliveTimer = nil
-            if switchingToUSB {
-                switchingToUSB = false
-                setState(.reconnecting(message: "USB cable detected. Switching to USB…"))
+            if let to = switchingLink {
+                switchingLink = nil
+                setState(.reconnecting(message: to == .usb ? "Switching to USB…" : "Switching to Wi-Fi…"))
             } else if wasConnected {
                 wasReady = true
                 lostAt = Clock.monotonic()
@@ -411,7 +441,7 @@ final class ConnectionManager {
                                  appVersion: ConnectionManager.appVersion,
                                  deviceId: deviceID,
                                  hostName: Host.current().localizedName ?? "Mac",
-                                 capabilities: ["mirror", "extend", "touch", "h264"],
+                                 capabilities: ["mirror", "extend", "touch", "h264", "hevc"],
                                  transport: endpoint.kind.rawValue)
         send(.control(.hello, hello))
         let deadline = DispatchWorkItem { [weak self] in

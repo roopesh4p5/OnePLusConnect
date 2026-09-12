@@ -13,6 +13,9 @@ pkill -x OnePlusConnect 2>/dev/null || true
 sleep 1
 rm -rf "$DST"
 ditto "$SRC" "$DST"
+# Move, don't copy: leaving the staging bundle behind makes Spotlight/Launchpad show two
+# "One+Connect" apps and the wrong one gets launched. /Applications is the only install.
+rm -rf "$SRC"
 
 if [[ "${1:-}" == "--reset-permissions" ]]; then
   tccutil reset ScreenCapture "$BUNDLE_ID" || true

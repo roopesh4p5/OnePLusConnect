@@ -75,6 +75,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         menu.addItem(.separator())
 
+        // Link choice (a switch, not a fallback: Wi-Fi stays wireless even with the cable in)
+        let linkItem = NSMenuItem(title: "Connect over", action: nil, keyEquivalent: "")
+        let linkMenu = NSMenu()
+        for m in LinkMode.allCases {
+            let it = NSMenuItem(title: m.title, action: #selector(selectLinkMode(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = m.rawValue
+            it.state = prefs.linkMode == m ? .on : .off
+            linkMenu.addItem(it)
+        }
+        linkItem.submenu = linkMenu
+        menu.addItem(linkItem)
+
         // Display mode
         let modeItem = NSMenuItem(title: "Display", action: nil, keyEquivalent: "")
         let modeMenu = NSMenu()
@@ -115,6 +128,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             it.target = self
             it.representedObject = mbps
             it.state = prefs.bitrateOverride == mbps * 1_000_000 ? .on : .off
+            qMenu.addItem(it)
+        }
+        qMenu.addItem(.separator())
+        qMenu.addItem(disabled("Codec"))
+        for c in VideoCodecChoice.allCases {
+            let it = NSMenuItem(title: c.title, action: #selector(selectCodec(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = c.rawValue
+            it.state = prefs.codec == c ? .on : .off
             qMenu.addItem(it)
         }
         qItem.submenu = qMenu
@@ -173,6 +195,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func selectMode(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let m = SessionMode(rawValue: raw) else { return }
         Preferences.shared.mode = m
+        Core.shared.session.applyPreferencesChange()
+    }
+
+    @objc private func selectLinkMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let m = LinkMode(rawValue: raw) else { return }
+        Preferences.shared.linkMode = m
+        Core.shared.connection.refreshLinkPreferences()
+    }
+
+    @objc private func selectCodec(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let c = VideoCodecChoice(rawValue: raw) else { return }
+        Preferences.shared.codec = c
         Core.shared.session.applyPreferencesChange()
     }
 

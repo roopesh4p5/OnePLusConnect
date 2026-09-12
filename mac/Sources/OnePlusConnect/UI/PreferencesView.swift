@@ -17,7 +17,9 @@ struct PreferencesView: View {
     @AppStorage(Preferences.Key.extendHiDPI) private var hiDPI = true
     @AppStorage(Preferences.Key.extendUseNativePixels) private var useNativePixels = true
     @AppStorage(Preferences.Key.keepDisplayOnReconnect) private var keepDisplay = true
-    @AppStorage(Preferences.Key.wifiEnabled) private var wifiEnabled = true
+    @AppStorage(Preferences.Key.linkMode) private var linkMode = LinkMode.auto.rawValue
+    @AppStorage(Preferences.Key.codec) private var codec = VideoCodecChoice.auto.rawValue
+    @AppStorage(Preferences.Key.adaptiveBitrate) private var adaptiveBitrate = true
     @AppStorage(Preferences.Key.wifiManualHost) private var wifiManualHost = ""
     @AppStorage(Preferences.Key.wifiDiscoveryPort) private var wifiDiscoveryPort = 27184
     @AppStorage(Preferences.Key.wifiBitrateCap) private var wifiBitrateCap = 0
@@ -52,6 +54,12 @@ struct PreferencesView: View {
                     Text("30").tag(30)
                     Text("60").tag(60)
                 }
+                Picker("Codec", selection: $codec) {
+                    ForEach(VideoCodecChoice.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                Toggle("Adapt the bitrate when the link cannot keep up", isOn: $adaptiveBitrate)
+                Text("HEVC carries the same picture in roughly half the bits of H.264, which is what keeps a Wi-Fi link as sharp as the cable. Adaptive bitrate lowers quality briefly instead of dropping whole frames.")
+                    .font(.caption).foregroundColor(.secondary)
             }
 
             Section("Input") {
@@ -64,20 +72,23 @@ struct PreferencesView: View {
             }
 
             Section("Connection") {
+                Picker("Connect over", selection: $linkMode) {
+                    ForEach(LinkMode.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                }
+                .pickerStyle(.inline)
                 TextField("adb path (blank = auto-detect)", text: $adbPath)
                 TextField("Port", value: $adbPort, format: .number)
                 Toggle("Resume sharing automatically after reconnect", isOn: $autoResume)
                 Button("Re-detect adb") { Core.shared.connection.relocateADB() }
-                Text("USB-C is always preferred: when adb sees an authorized tablet, the link goes over the cable.")
+                Text("This is a choice, not a fallback: “Wi-Fi only” keeps streaming wirelessly even while the cable is plugged in, and switching here takes effect immediately.")
                     .font(.caption).foregroundColor(.secondary)
             }
 
-            Section("Wi-Fi fallback") {
-                Toggle("Use Wi-Fi when no USB cable is detected", isOn: $wifiEnabled)
+            Section("Wi-Fi") {
                 TextField("Tablet address (optional, e.g. 192.168.1.20 or 192.168.1.20:27183)", text: $wifiManualHost)
-                    .disabled(!wifiEnabled)
+                    .disabled(linkMode == LinkMode.usb.rawValue)
                 TextField("Discovery port (UDP)", value: $wifiDiscoveryPort, format: .number)
-                    .disabled(!wifiEnabled)
+                    .disabled(linkMode == LinkMode.usb.rawValue)
                 Picker("Bitrate cap on Wi-Fi", selection: $wifiBitrateCap) {
                     Text("None").tag(0)
                     Text("8 Mbps").tag(8)
@@ -86,8 +97,8 @@ struct PreferencesView: View {
                     Text("30 Mbps").tag(30)
                     Text("50 Mbps").tag(50)
                 }
-                .disabled(!wifiEnabled)
-                Text("The tablet app announces itself on the local network; leave the address blank unless your router blocks broadcasts. A manual address is used even without a beacon. The cap is ignored when a bitrate override is chosen in the menu.")
+                .disabled(linkMode == LinkMode.usb.rawValue)
+                Text("The tablet app announces itself on the local network; leave the address blank unless your router blocks broadcasts. A manual address is used even without a beacon. Leave the cap at None for the sharpest wireless picture — adaptive bitrate already backs off when the network cannot keep up.")
                     .font(.caption).foregroundColor(.secondary)
             }
         }
@@ -99,8 +110,9 @@ struct PreferencesView: View {
         .onChange(of: fps) { _, _ in Core.shared.session.applyPreferencesChange() }
         .onChange(of: longPressRightClick) { _, _ in Core.shared.input.refreshPreferences() }
         .onChange(of: pinchZoom) { _, _ in Core.shared.input.refreshPreferences() }
-        .onChange(of: wifiEnabled) { _, _ in Core.shared.connection.refreshWiFiPreferences() }
-        .onChange(of: wifiManualHost) { _, _ in Core.shared.connection.refreshWiFiPreferences() }
-        .onChange(of: wifiDiscoveryPort) { _, _ in Core.shared.connection.refreshWiFiPreferences() }
+        .onChange(of: codec) { _, _ in Core.shared.session.applyPreferencesChange() }
+        .onChange(of: linkMode) { _, _ in Core.shared.connection.refreshLinkPreferences() }
+        .onChange(of: wifiManualHost) { _, _ in Core.shared.connection.refreshLinkPreferences() }
+        .onChange(of: wifiDiscoveryPort) { _, _ in Core.shared.connection.refreshLinkPreferences() }
     }
 }

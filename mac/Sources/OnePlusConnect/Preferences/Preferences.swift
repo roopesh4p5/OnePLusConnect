@@ -24,6 +24,53 @@ enum PinchZoomMode: String, CaseIterable {
     var title: String { self == .keyboard ? "Keyboard zoom (⌘+ / ⌘−)" : "Off" }
 }
 
+/// Which link the user wants used. This is a *choice*, not a fallback order: `.wifi` stays on
+/// Wi-Fi even while a USB cable is plugged in, and `.usb` never touches the network.
+enum LinkMode: String, CaseIterable {
+    case auto
+    case usb
+    case wifi
+
+    var title: String {
+        switch self {
+        case .auto: return "Automatic (prefer USB, fall back to Wi-Fi)"
+        case .usb: return "USB cable only"
+        case .wifi: return "Wi-Fi only (ignore the cable)"
+        }
+    }
+    var shortTitle: String {
+        switch self {
+        case .auto: return "Automatic"
+        case .usb: return "USB"
+        case .wifi: return "Wi-Fi"
+        }
+    }
+    /// Link this mode pins to, or nil for "either".
+    var forcedKind: LinkKind? {
+        switch self {
+        case .auto: return nil
+        case .usb: return .usb
+        case .wifi: return .wifi
+        }
+    }
+}
+
+/// Video codec to stream with. HEVC carries roughly the same picture in 40-50% fewer bits, which is
+/// what makes a Wi-Fi link look as sharp as the cable; it is used whenever the tablet advertises it.
+enum VideoCodecChoice: String, CaseIterable {
+    case auto
+    case hevc
+    case h264
+
+    var title: String {
+        switch self {
+        case .auto: return "Automatic (HEVC when the tablet supports it)"
+        case .hevc: return "HEVC / H.265"
+        case .h264: return "H.264"
+        }
+    }
+}
+
 /// UserDefaults-backed preferences. Keys are stable so SwiftUI @AppStorage can share them.
 final class Preferences {
     static let shared = Preferences()
@@ -48,7 +95,9 @@ final class Preferences {
         static let extendUseNativePixels = "display.useNativePixels"
         static let keepDisplayOnReconnect = "display.keepOnReconnect"
         static let showOverlay = "tablet.showOverlay"
-        static let wifiEnabled = "wifi.enabled"
+        static let linkMode = "link.mode"
+        static let codec = "video.codec"
+        static let adaptiveBitrate = "video.adaptiveBitrate"
         static let wifiManualHost = "wifi.manualHost"
         static let wifiDiscoveryPort = "wifi.discoveryPort"
         static let wifiBitrateCap = "wifi.bitrateCapMbps" // 0 = no cap
@@ -74,7 +123,9 @@ final class Preferences {
             Key.extendUseNativePixels: true,
             Key.keepDisplayOnReconnect: true,
             Key.showOverlay: true,
-            Key.wifiEnabled: true,
+            Key.linkMode: LinkMode.auto.rawValue,
+            Key.codec: VideoCodecChoice.auto.rawValue,
+            Key.adaptiveBitrate: true,
             Key.wifiManualHost: "",
             Key.wifiDiscoveryPort: 27184,
             Key.wifiBitrateCap: 0,
@@ -121,13 +172,16 @@ final class Preferences {
         set { d.set(newValue, forKey: Key.adbPort) }
     }
 
-    // MARK: Wi-Fi fallback
+    // MARK: Link selection
 
-    /// When no authorized USB tablet is present, connect over the local network instead.
-    var wifiEnabled: Bool {
-        get { d.bool(forKey: Key.wifiEnabled) }
-        set { d.set(newValue, forKey: Key.wifiEnabled) }
+    /// User's explicit link choice (see `LinkMode`).
+    var linkMode: LinkMode {
+        get { LinkMode(rawValue: d.string(forKey: Key.linkMode) ?? "") ?? .auto }
+        set { d.set(newValue.rawValue, forKey: Key.linkMode) }
     }
+
+    /// Whether the Wi-Fi path (discovery + dialling a LAN address) may be used at all.
+    var wifiEnabled: Bool { linkMode != .usb }
     /// Optional "ip" or "ip:port" to use when the discovery beacon cannot cross the network.
     var wifiManualHost: String {
         get { d.string(forKey: Key.wifiManualHost) ?? "" }
@@ -141,6 +195,19 @@ final class Preferences {
     var wifiBitrateCapMbps: Int {
         get { d.integer(forKey: Key.wifiBitrateCap) }
         set { d.set(newValue, forKey: Key.wifiBitrateCap) }
+    }
+
+    /// Requested codec; the session resolves `.auto` against the tablet's advertised codecs.
+    var codec: VideoCodecChoice {
+        get { VideoCodecChoice(rawValue: d.string(forKey: Key.codec) ?? "") ?? .auto }
+        set { d.set(newValue.rawValue, forKey: Key.codec) }
+    }
+
+    /// Let the session lower (and recover) the encoder bitrate when the link cannot keep up,
+    /// instead of dropping whole frames. Matters most on Wi-Fi.
+    var adaptiveBitrate: Bool {
+        get { d.bool(forKey: Key.adaptiveBitrate) }
+        set { d.set(newValue, forKey: Key.adaptiveBitrate) }
     }
 
     var pinchZoom: PinchZoomMode {

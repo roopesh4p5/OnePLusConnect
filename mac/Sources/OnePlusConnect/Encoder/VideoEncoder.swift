@@ -15,19 +15,31 @@ enum EncoderError: LocalizedError {
     }
 }
 
+/// Wire codec. The value is what goes into SESSION_CONFIG.codec and what the tablet matches on.
+enum StreamCodec: String {
+    case h264
+    case hevc
+
+    var title: String { self == .hevc ? "HEVC" : "H.264" }
+    var cmCodecType: CMVideoCodecType { self == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264 }
+}
+
 struct EncodedFrame {
-    /// Annex B access unit (start-code delimited NAL units, no SPS/PPS).
+    /// Annex B access unit (start-code delimited NAL units, no parameter sets).
     let data: Data
     let isKeyframe: Bool
-    /// Annex B SPS+PPS, present on keyframes.
+    /// Annex B parameter sets (SPS+PPS for H.264, VPS+SPS+PPS for HEVC), present on keyframes.
     let parameterSets: Data?
     let presentationTime: CMTime
     let captureTimestampMicros: UInt64
     let encodeLatencyMs: Double
 }
 
-/// VideoToolbox H.264 encoder tuned for low latency: realtime, no B-frames, LL rate control.
-final class H264Encoder {
+/// VideoToolbox encoder tuned for low latency: realtime, no B-frames, LL rate control.
+/// Handles both H.264 and HEVC; HEVC is what makes a Wi-Fi link look like the cable, because it
+/// needs roughly half the bits for the same picture.
+final class VideoEncoder {
+    let codec: StreamCodec
     let width: Int
     let height: Int
     let fps: Int
@@ -42,7 +54,8 @@ final class H264Encoder {
     private var lastParameterSets: Data?
     private var lastFormatDescription: CMFormatDescription?
 
-    init(width: Int, height: Int, fps: Int, bitrate: Int) throws {
+    init(codec: StreamCodec, width: Int, height: Int, fps: Int, bitrate: Int) throws {
+        self.codec = codec
         self.width = width
         self.height = height
         self.fps = fps
@@ -60,7 +73,7 @@ final class H264Encoder {
         var s: VTCompressionSession?
         var status = VTCompressionSessionCreate(allocator: nil,
                                                 width: Int32(width), height: Int32(height),
-                                                codecType: kCMVideoCodecType_H264,
+                                                codecType: codec.cmCodecType,
                                                 encoderSpecification: spec as CFDictionary,
                                                 imageBufferAttributes: sourceAttrs as CFDictionary,
                                                 compressedDataAllocator: nil,
@@ -72,7 +85,7 @@ final class H264Encoder {
             let fallbackSpec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
             status = VTCompressionSessionCreate(allocator: nil,
                                                 width: Int32(width), height: Int32(height),
-                                                codecType: kCMVideoCodecType_H264,
+                                                codecType: codec.cmCodecType,
                                                 encoderSpecification: fallbackSpec as CFDictionary,
                                                 imageBufferAttributes: sourceAttrs as CFDictionary,
                                                 compressedDataAllocator: nil,
@@ -88,7 +101,7 @@ final class H264Encoder {
         }
         set(kVTCompressionPropertyKey_RealTime, true)
         set(kVTCompressionPropertyKey_AllowFrameReordering, false)
-        set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel)
+        set(kVTCompressionPropertyKey_ProfileLevel, codec == .hevc ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel)
         set(kVTCompressionPropertyKey_AverageBitRate, bitrate)
         // Peak limit 1.5x the average per second: keyframes and busy frames get headroom instead of being smeared.
         set(kVTCompressionPropertyKey_DataRateLimits, [bitrate * 3 / 16, 1] as [Int])
@@ -98,9 +111,30 @@ final class H264Encoder {
         set(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, 10)
         set(kVTCompressionPropertyKey_MaximizePowerEfficiency, false)
         set(kVTCompressionPropertyKey_MaxFrameDelayCount, 0)
-        set(kVTCompressionPropertyKey_H264EntropyMode, kVTH264EntropyMode_CABAC)
+        if codec == .h264 { set(kVTCompressionPropertyKey_H264EntropyMode, kVTH264EntropyMode_CABAC) }
         VTCompressionSessionPrepareToEncodeFrames(session)
-        Log.shared.info("Encoder ready: H.264 \(width)x\(height) @ \(fps) fps, \(bitrate / 1_000_000) Mbps")
+        Log.shared.info("Encoder ready: \(codec.title) \(width)x\(height) @ \(fps) fps, \(bitrate / 1_000_000) Mbps")
+    }
+
+    /// Whether VideoToolbox on this Mac can encode `codec` at all. Probed once per codec, because the
+    /// answer decides what we promise the tablet in SESSION_CONFIG (before any frame is encoded).
+    private static var availability: [String: Bool] = [:]
+    private static let availabilityLock = NSLock()
+    static func isAvailable(_ codec: StreamCodec) -> Bool {
+        availabilityLock.lock(); defer { availabilityLock.unlock() }
+        if let cached = availability[codec.rawValue] { return cached }
+        var session: VTCompressionSession?
+        let spec: [CFString: Any] = [kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true]
+        let status = VTCompressionSessionCreate(allocator: nil, width: 1920, height: 1080,
+                                                codecType: codec.cmCodecType,
+                                                encoderSpecification: spec as CFDictionary,
+                                                imageBufferAttributes: nil, compressedDataAllocator: nil,
+                                                outputCallback: nil, refcon: nil, compressionSessionOut: &session)
+        let ok = status == noErr && session != nil
+        if let session = session { VTCompressionSessionInvalidate(session) }
+        availability[codec.rawValue] = ok
+        if !ok { Log.shared.warn("This Mac cannot encode \(codec.title) (VideoToolbox \(status)).") }
+        return ok
     }
 
     func forceKeyframe() {
@@ -160,12 +194,16 @@ final class H264Encoder {
         var nalLengthSize = 4
         if let fmt = CMSampleBufferGetFormatDescription(sb) {
             if isKeyframe || lastParameterSets == nil || lastFormatDescription == nil || !CMFormatDescriptionEqual(fmt, otherFormatDescription: lastFormatDescription) {
-                parameterSets = H264Encoder.extractParameterSets(fmt, nalLengthSize: &nalLengthSize)
+                parameterSets = VideoEncoder.extractParameterSets(fmt, codec: codec, nalLengthSize: &nalLengthSize)
                 lastParameterSets = parameterSets
                 lastFormatDescription = fmt
             } else {
                 var tmp: Int32 = 0
-                _ = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, parameterSetIndex: 0, parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: nil, nalUnitHeaderLengthOut: &tmp)
+                if codec == .hevc {
+                    _ = CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(fmt, parameterSetIndex: 0, parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: nil, nalUnitHeaderLengthOut: &tmp)
+                } else {
+                    _ = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, parameterSetIndex: 0, parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: nil, nalUnitHeaderLengthOut: &tmp)
+                }
                 if tmp > 0 { nalLengthSize = Int(tmp) }
             }
         }
@@ -179,7 +217,7 @@ final class H264Encoder {
         }
         guard copyStatus == noErr else { return }
 
-        let annexB = H264Encoder.avccToAnnexB(raw, lengthSize: nalLengthSize)
+        let annexB = VideoEncoder.avccToAnnexB(raw, lengthSize: nalLengthSize)
         let frame = EncodedFrame(data: annexB,
                                  isKeyframe: isKeyframe,
                                  parameterSets: isKeyframe ? parameterSets : nil,
@@ -191,17 +229,24 @@ final class H264Encoder {
 
     private static let startCode = Data([0, 0, 0, 1])
 
-    static func extractParameterSets(_ fmt: CMFormatDescription, nalLengthSize: inout Int) -> Data? {
+    /// Annex B parameter sets: SPS+PPS (H.264) or VPS+SPS+PPS (HEVC), in the order VideoToolbox reports them.
+    static func extractParameterSets(_ fmt: CMFormatDescription, codec: StreamCodec, nalLengthSize: inout Int) -> Data? {
+        func describe(_ index: Int, _ ptr: UnsafeMutablePointer<UnsafePointer<UInt8>?>?, _ size: UnsafeMutablePointer<Int>?,
+                      _ count: UnsafeMutablePointer<Int>?, _ headerLen: UnsafeMutablePointer<Int32>?) -> OSStatus {
+            codec == .hevc
+                ? CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(fmt, parameterSetIndex: index, parameterSetPointerOut: ptr, parameterSetSizeOut: size, parameterSetCountOut: count, nalUnitHeaderLengthOut: headerLen)
+                : CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, parameterSetIndex: index, parameterSetPointerOut: ptr, parameterSetSizeOut: size, parameterSetCountOut: count, nalUnitHeaderLengthOut: headerLen)
+        }
         var count = 0
         var headerLen: Int32 = 4
-        let s = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, parameterSetIndex: 0, parameterSetPointerOut: nil, parameterSetSizeOut: nil, parameterSetCountOut: &count, nalUnitHeaderLengthOut: &headerLen)
+        let s = describe(0, nil, nil, &count, &headerLen)
         guard s == noErr, count > 0 else { return nil }
         nalLengthSize = Int(headerLen)
         var out = Data()
         for i in 0..<count {
             var ptr: UnsafePointer<UInt8>?
             var size = 0
-            let r = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(fmt, parameterSetIndex: i, parameterSetPointerOut: &ptr, parameterSetSizeOut: &size, parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil)
+            let r = describe(i, &ptr, &size, nil, nil)
             guard r == noErr, let p = ptr else { continue }
             out.append(startCode)
             out.append(p, count: size)

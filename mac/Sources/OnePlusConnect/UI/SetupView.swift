@@ -41,8 +41,8 @@ struct SetupView: View {
             HStack(alignment: .top) {
                 Image(systemName: "wifi").foregroundColor(.secondary)
                 VStack(alignment: .leading) {
-                    Text("Wi-Fi fallback").bold()
-                    Text("If no USB-C cable is detected, One+Connect looks for the tablet on the local network. Open the tablet app and keep both devices on the same Wi-Fi. macOS may ask to allow local network access — click Allow.")
+                    Text("USB or Wi-Fi — your choice").bold()
+                    Text("Pick the link in the menu bar under “Connect over”: Automatic prefers the cable, Wi-Fi only stays wireless even with the cable plugged in. For Wi-Fi, open the tablet app and keep both devices on the same network. macOS may ask to allow local network access — click Allow.")
                         .font(.caption).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

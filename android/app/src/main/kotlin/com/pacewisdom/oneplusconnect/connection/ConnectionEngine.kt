@@ -273,14 +273,16 @@ class ConnectionEngine(private val context: Context) : VideoDecoder.Listener {
     // ---------------------------------------------------------------- session
 
     private fun startSession(cfg: Messages.SessionConfig) {
-        if (!cfg.codec.equals("h264", ignoreCase = true) || !VideoDecoder.isHardwareDecoderAvailable()) {
+        val mime = VideoDecoder.mimeFor(cfg.codec)
+        if (!VideoDecoder.isHardwareDecoderAvailable(mime)) {
             send(PacketType.CONFIG_ACK, Messages.configAck(cfg.sessionId, false, "Tablet could not decode the selected video format (${cfg.codec})."))
             return
         }
         val previous = sessionConfig
         sessionConfig = cfg
-        Log.i(TAG, "Session ${cfg.sessionId}: ${cfg.mode} ${cfg.width}x${cfg.height} @${cfg.fps} ${cfg.bitrateMbps} Mbps")
+        Log.i(TAG, "Session ${cfg.sessionId}: ${cfg.mode} ${cfg.width}x${cfg.height} @${cfg.fps} ${cfg.codec} ${cfg.bitrateMbps} Mbps")
         if (previous == null) decoder.resetStats()
+        decoder.setCodec(cfg.codec)
         decoder.setStreamSize(cfg.width, cfg.height)
         _state.update { it.copy(session = cfg, videoActive = false, inputActive = true, lastError = null) }
         send(PacketType.CONFIG_ACK, Messages.configAck(cfg.sessionId, true, null))
@@ -367,14 +369,14 @@ class ConnectionEngine(private val context: Context) : VideoDecoder.Listener {
 
     private fun refreshStatusText() {
         _state.update { s ->
-            val wifi = if (s.wifiConnected) " Wi-Fi fallback is available on ${s.wifiAddress ?: "this network"}." else ""
+            val wifi = if (s.wifiConnected) " Wi-Fi is ready on ${s.wifiAddress ?: "this network"} — pick “Wi-Fi” on the Mac to connect wirelessly." else ""
             val text = when {
                 s.session != null && !s.videoActive -> "Starting video…"
                 s.session != null -> "Sharing over ${s.link ?: "USB"}"
                 s.macConnected -> "Mac connected over ${s.link ?: "USB"}. Click Start Sharing on your Mac."
                 s.usbConnected && !s.adbEnabled -> "Enable USB debugging in Developer Options.$wifi"
                 s.usbConnected -> "Waiting for Mac over USB…$wifi"
-                s.wifiConnected -> "Waiting for Mac over Wi-Fi (${s.wifiAddress})… Plug in USB-C for the best experience."
+                s.wifiConnected -> "Waiting for Mac over Wi-Fi (${s.wifiAddress})…"
                 else -> "Connect your tablet to your Mac using USB-C, or join the same Wi-Fi network as your Mac."
             }
             s.copy(statusText = text)

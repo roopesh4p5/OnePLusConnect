@@ -1,11 +1,14 @@
 # One+Connect wire protocol v1
 
 Reliable byte stream: TCP to the tablet app on port 27183. Mac is the client, tablet the server.
-Two links carry the same stream, chosen by the Mac in this order:
+Two links carry the same stream; which one is used is the Mac user's choice (Preferences → Connection,
+or the menu bar's "Connect over"):
 
 1. **USB** — `adb forward tcp:27183 tcp:27183`; the Mac dials `127.0.0.1:27183`.
-2. **Wi-Fi fallback** — when adb reports no authorized tablet, the Mac dials the tablet's LAN address
-   found through the discovery beacon below (or a manually entered address).
+2. **Wi-Fi** — the Mac dials the tablet's LAN address found through the discovery beacon below (or a
+   manually entered address). "Wi-Fi only" stays wireless even while a cable is plugged in.
+
+In "Automatic" the Mac prefers the cable and uses Wi-Fi when no authorized tablet is on USB.
 
 The tablet listens on `0.0.0.0:27183` so both work at once; it tells the links apart by the peer address
 (loopback = USB). `HELLO.transport` (`"usb"` | `"wifi"`) is sent as a hint as well.
@@ -41,8 +44,8 @@ present while a beacon was seen within the last 6 s.
 | Type | Name | Dir | Payload |
 | --- | --- | --- | --- |
 | 0x01 | HELLO | Mac→Tab | JSON `{protocolVersion, appVersion, deviceId, hostName, capabilities[], transport?}` |
-| 0x02 | HELLO_ACK | Tab→Mac | JSON `{protocolVersion, appVersion, deviceModel, manufacturer, androidVersion, displayWidth, displayHeight, refreshRates[], codecs[], touch, multitouch, stylus, orientation, densityDpi}` |
-| 0x03 | CONFIG | Mac→Tab | JSON `{sessionId, mode: "mirror"\|"extend", width, height, fps, bitrate, codec: "h264", colorFormat: "nv12", orientation}` |
+| 0x02 | HELLO_ACK | Tab→Mac | JSON `{protocolVersion, appVersion, deviceModel, manufacturer, androidVersion, displayWidth, displayHeight, refreshRates[], codecs[], touch, multitouch, stylus, orientation, densityDpi, maxFpsAtNative, maxFpsAtNativeHevc}` |
+| 0x03 | CONFIG | Mac→Tab | JSON `{sessionId, mode: "mirror"\|"extend", width, height, fps, bitrate, codec: "h264"\|"hevc", colorFormat: "nv12", orientation}` |
 | 0x04 | CONFIG_ACK | Tab→Mac | JSON `{sessionId, ok, error?}` (= SESSION_READY) |
 | 0x06 | SESSION_STOP | both | JSON `{reason}` |
 | 0x10 | VIDEO | Mac→Tab | one H.264 access unit, Annex B (P-frame) |

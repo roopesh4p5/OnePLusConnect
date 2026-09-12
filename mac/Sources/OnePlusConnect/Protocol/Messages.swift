@@ -45,6 +45,8 @@ struct HelloAckMessage: Codable {
     var densityDpi: Int?
     /// Highest frame rate the tablet's H.264 decoder supports at its native panel size (0/absent = unknown).
     var maxFpsAtNative: Int?
+    /// Same ceiling for the HEVC decoder; often lower than H.264 (absent = tablet predates HEVC support).
+    var maxFpsAtNativeHevc: Int?
 }
 
 struct SessionConfigMessage: Codable {

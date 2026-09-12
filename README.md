@@ -1,16 +1,22 @@
 # One+Connect (POC)
 
 Companion that turns a OnePlus Pad Go 2 into a second Mac display with touch mapped back to the
-Mac. This is the MVP from the PRD: ADB transport + H.264 + Mirror + Touch→mouse, plus an experimental
-Extend mode built on a virtual display, and a Wi-Fi fallback for when no cable is connected.
+Mac. This is the MVP from the PRD: ADB transport + H.264/HEVC + Mirror + Touch→mouse, plus an experimental
+Extend mode built on a virtual display, and a Wi-Fi link you can choose instead of the cable.
 
-Link selection (Mac side, every 1.5 s while not connected):
-`if adb sees an authorized tablet → USB-C (adb forward)  else → Wi-Fi (beacon discovery or manual IP)`.
-An idle Wi-Fi link moves back to USB automatically as soon as a cable is detected.
+Link selection is a *choice*, not a fallback order (menu bar → "Connect over", or Preferences → Connection):
+
+| Mode | Behaviour |
+| --- | --- |
+| Automatic | Prefer the cable; use Wi-Fi when no authorized tablet is on USB; an idle Wi-Fi link moves back to USB when a cable appears. |
+| USB cable only | Only the cable; the network is never touched. |
+| Wi-Fi only | Only the network, **even while a cable is plugged in**. |
+
+Switching takes effect immediately — the current link is dropped and the other one dialled.
 
 ```
 Mac (menu bar app)                              OnePlus Pad Go 2 (Android app)
- ScreenCaptureKit → VideoToolbox H.264 ─┐        ┌─ MediaCodec → SurfaceView
+ ScreenCaptureKit → VideoToolbox HEVC ──┐        ┌─ MediaCodec → SurfaceView
  CGEvent mouse/scroll/zoom  ◄───────────┼ USB or ┼─ MotionEvent (normalized touch)
  adb forward tcp:27183 / LAN ip:27183 ──┘  Wi-Fi └─ 0.0.0.0:27183 server + UDP 27184 beacon
 ```
@@ -64,7 +70,7 @@ Wi-Fi / Mac connected (via USB or Wi-Fi) / Screen sharing, plus the developer cr
 No cable? Put the tablet and the Mac on the same Wi-Fi network and open the tablet app; the Mac finds
 it within a few seconds (menu bar shows "✓ Ready to share via Wi-Fi"). macOS 15+ asks once to allow
 local network access — click Allow. If your router blocks broadcasts (guest/AP isolation), enter the
-tablet's IP from the dashboard in Preferences → Wi-Fi fallback.
+tablet's IP from the dashboard in Preferences → Wi-Fi.
 
 ## Using it
 
@@ -87,10 +93,14 @@ for 30 s so windows do not jump.
 * Transport is `adb forward` over USB, or a direct TCP connection over Wi-Fi; the tablet is the TCP
   server on `0.0.0.0:27183`. A custom USB accessory transport is a later phase (`Transport` is the seam).
 * Wi-Fi has no pairing/encryption in this POC: any device on the same LAN could connect to the tablet
-  app while it is open and idle. Use it on trusted networks. Bitrate is capped at 12 Mbps on Wi-Fi by
-  default (Preferences → Wi-Fi fallback); USB-C remains the recommended link.
+  app while it is open and idle. Use it on trusted networks. Wi-Fi is uncapped by default so the
+  picture stays sharp; set a cap in Preferences → Wi-Fi if you would rather protect the network.
 * No foreground service on Android: keep the app in the foreground while sharing (the screen is
   kept awake automatically).
-* Stylus, audio, clipboard, keyboard, HEVC, adaptive bitrate are not implemented (packet types
-  reserved).
+* Video is HEVC when the tablet advertises it (about half the bits of H.264 for the same picture,
+  which is what keeps Wi-Fi as sharp as the cable) and falls back to H.264 automatically if the tablet
+  refuses it or its decoder fails. Pick the codec explicitly under Quality → Codec.
+* Adaptive bitrate (Preferences → Video) lowers and recovers the encoder bitrate when the link cannot
+  keep up, instead of dropping whole frames.
+* Stylus, audio, clipboard and keyboard are not implemented (packet types reserved).
 * Nothing leaves the USB cable or your local network. No analytics, no internet access.

@@ -45,7 +45,11 @@ final class SessionManager {
     private var config: SessionConfigMessage?
     private var displayID: CGDirectDisplayID = 0
     private var capture: CaptureManager?
-    private var encoder: H264Encoder?
+    private var encoder: VideoEncoder?
+    private var codec: StreamCodec = .h264
+    /// Set when the tablet refuses (or fails to decode) the negotiated codec, so the next attempt
+    /// uses the one we know works instead of negotiating the same failure again.
+    private var forcedCodec: StreamCodec?
     private var configTimeout: DispatchWorkItem?
     private var statsTimer: DispatchSourceTimer?
     private var displayGrace: DispatchWorkItem?
@@ -53,6 +57,15 @@ final class SessionManager {
     private var frameSequence: UInt32 = 0
     private var backlogThreshold = 128 * 1024
     private var pendingResume = false
+
+    // Adaptive bitrate: `targetBitrate` is what the preferences ask for, `currentBitrate` what the
+    // encoder is actually running at after backing off for a link that cannot keep up.
+    private var targetBitrate = 0
+    private var currentBitrate = 0
+    private var clearSeconds = 0
+    private let rateLock = NSLock()
+    private var framesOffered = 0
+    private var framesHeldBack = 0
 
     var currentConfig: SessionConfigMessage? { config }
     var currentDisplayID: CGDirectDisplayID { displayID }
@@ -104,7 +117,9 @@ final class SessionManager {
         queue.async {
             guard self.state == .streaming else { return }
             let p = Preferences.shared
-            if p.mode != self.mode || p.preset != self.preset || p.fps != self.preset.fps || self.effectiveBitrate(p) != self.preset.bitrate {
+            if p.codec != .auto, self.forcedCodec != nil { self.forcedCodec = nil } // explicit pick clears the fallback
+            let wantedCodec = self.forcedCodec ?? self.connection.state.deviceInfo.map { SessionManager.resolveCodec(p.codec, advertised: $0.codecs) } ?? self.codec
+            if p.mode != self.mode || p.preset != self.preset || p.fps != self.preset.fps || self.effectiveBitrate(p) != self.preset.bitrate || wantedCodec != self.codec {
                 self.reconfigure(reason: "settings changed", recreateDisplay: p.mode != self.mode)
             }
         }
@@ -138,6 +153,7 @@ final class SessionManager {
         let prefs = Preferences.shared
         mode = prefs.mode
         preset = prefs.preset
+        codec = forcedCodec ?? SessionManager.resolveCodec(prefs.codec, advertised: info.codecs)
         var fps = prefs.fps
         if fps <= 0 { fps = 60 }
         let bitrate = effectiveBitrate(prefs)
@@ -177,7 +193,9 @@ final class SessionManager {
         let native = nativePanelSize(info: info)
         let pinNative = mode == .extend && prefs.extendUseNativePixels
         let hiDPI = prefs.extendHiDPI
-        let maxFpsAtNative = info.maxFpsAtNative ?? 0
+        // The tablet reports its decoder ceiling per codec; HEVC is often capped lower than H.264.
+        let maxFpsAtNative = (codec == .hevc ? (info.maxFpsAtNativeHevc ?? info.maxFpsAtNative) : info.maxFpsAtNative) ?? 0
+        let codec = self.codec
 
         Task.detached { [weak self] in
             if mode == .extend {
@@ -209,9 +227,9 @@ final class SessionManager {
                     Log.shared.warn("Source \(sw)x\(sh) is smaller than the \(w)x\(h) stream; the tablet image will be upscaled.")
                 }
                 let cfg = SessionConfigMessage(sessionId: currentSessionID, mode: mode, width: w, height: h, fps: fps,
-                                               bitrate: preset.bitrate, codec: "h264", colorFormat: "nv12", orientation: orientation)
+                                               bitrate: preset.bitrate, codec: codec.rawValue, colorFormat: "nv12", orientation: orientation)
                 self.config = cfg
-                Log.shared.info("Session config: \(mode.rawValue) \(w)x\(h) @\(preset.fps) \(preset.bitrate / 1_000_000)Mbps source=\(sw)x\(sh) display=\(targetID)")
+                Log.shared.info("Session config: \(mode.rawValue) \(w)x\(h) @\(fps) \(codec.title) \(preset.bitrate / 1_000_000)Mbps source=\(sw)x\(sh) display=\(targetID)")
                 self.connection.send(.control(.config, cfg, sessionID: currentSessionID))
                 let timeout = DispatchWorkItem { [weak self] in
                     guard let self = self, self.state == .starting else { return }
@@ -260,10 +278,64 @@ final class SessionManager {
         return (ew, eh)
     }
 
+    /// Resolves the codec preference against what the tablet advertised and what this Mac can encode.
+    /// HEVC needs roughly half the bits of H.264 for the same picture, which is what lets a Wi-Fi
+    /// link carry a native-resolution stream without softening it.
+    static func resolveCodec(_ choice: VideoCodecChoice, advertised: [String]) -> StreamCodec {
+        let tablet = Set(advertised.map { $0.lowercased() })
+        func usable(_ c: StreamCodec) -> Bool { tablet.contains(c.rawValue) && VideoEncoder.isAvailable(c) }
+        switch choice {
+        case .h264:
+            return .h264
+        case .hevc:
+            if usable(.hevc) { return .hevc }
+            Log.shared.warn("HEVC requested but unavailable (tablet codecs: \(advertised.joined(separator: ", "))); using H.264.")
+            return .h264
+        case .auto:
+            return usable(.hevc) ? .hevc : .h264
+        }
+    }
+
+    /// Once per second: back the encoder off when the link is holding frames back, and walk it
+    /// up again once it is clear. Without this a link that cannot carry the target bitrate just
+    /// loses frames, which looks far worse than the same picture at a lower bitrate.
+    private func adaptBitrate() {
+        guard Preferences.shared.adaptiveBitrate, state == .streaming, let enc = encoder, targetBitrate > 0 else { return }
+        rateLock.lock()
+        let offered = framesOffered, heldBack = framesHeldBack
+        framesOffered = 0; framesHeldBack = 0
+        rateLock.unlock()
+
+        let total = offered + heldBack
+        guard total >= 5 else { return } // too small a sample to judge
+        let congestion = Double(heldBack) / Double(total)
+        let floorBitrate = max(4_000_000, targetBitrate / 8)
+
+        if congestion > 0.08 {
+            clearSeconds = 0
+            let next = max(floorBitrate, currentBitrate * 3 / 4)
+            if next < currentBitrate {
+                currentBitrate = next
+                enc.setBitrate(next)
+                Log.shared.info("Link held back \(Int(congestion * 100))% of frames; bitrate → \(next / 1_000_000) Mbps")
+            }
+        } else if congestion < 0.01 {
+            clearSeconds += 1
+            if clearSeconds >= 4, currentBitrate < targetBitrate {
+                clearSeconds = 0
+                let next = min(targetBitrate, currentBitrate + max(1_000_000, targetBitrate / 10))
+                currentBitrate = next
+                enc.setBitrate(next)
+            }
+        } else {
+            clearSeconds = 0
+        }
+    }
+
     private func startPipeline() {
         guard let cfg = config else { return }
         do {
-            let enc = try H264Encoder(width: cfg.width, height: cfg.height, fps: cfg.fps, bitrate: cfg.bitrate)
+            let enc = try VideoEncoder(codec: codec, width: cfg.width, height: cfg.height, fps: cfg.fps, bitrate: cfg.bitrate)
             enc.onFrame = { [weak self] frame in self?.sendEncoded(frame) }
             encoder = enc
         } catch {
@@ -274,14 +346,20 @@ final class SessionManager {
         let bytesPerFrame = max(1, cfg.bitrate / 8 / max(1, cfg.fps))
         backlogThreshold = max(128 * 1024, bytesPerFrame * 4)
         frameSequence = 0
+        targetBitrate = cfg.bitrate
+        currentBitrate = cfg.bitrate
+        clearSeconds = 0
+        rateLock.lock(); framesOffered = 0; framesHeldBack = 0; rateLock.unlock()
 
         let cap = CaptureManager(displayID: displayID, width: cfg.width, height: cfg.height, fps: cfg.fps)
         cap.onFrame = { [weak self] pixelBuffer, pts in
             guard let self = self, let enc = self.encoder else { return }
             if self.connection.pendingBytes > self.backlogThreshold {
+                self.rateLock.lock(); self.framesHeldBack += 1; self.rateLock.unlock()
                 self.diagnostics.recordDrop()
                 return
             }
+            self.rateLock.lock(); self.framesOffered += 1; self.rateLock.unlock()
             self.diagnostics.recordCapture()
             enc.encode(pixelBuffer: pixelBuffer, presentationTime: pts, captureTimestampMicros: Clock.nowMicros())
         }
@@ -405,6 +483,10 @@ final class SessionManager {
             configTimeout?.cancel(); configTimeout = nil
             if ack.ok {
                 startPipeline()
+            } else if codec == .hevc, forcedCodec == nil {
+                Log.shared.warn("Tablet refused HEVC (\(ack.error ?? "no reason given")); retrying with H.264.")
+                forcedCodec = .h264
+                reconfigure(reason: "HEVC refused by the tablet", recreateDisplay: false)
             } else {
                 teardown(notifyTablet: false, keepDisplay: false, next: .idle)
                 lastError = ack.error ?? "Tablet could not decode the selected video format."
@@ -429,8 +511,14 @@ final class SessionManager {
         case .error:
             if let e = JSONCoding.decode(ErrorMessage.self, from: packet.payload), state.isActive {
                 if e.code == "decoder_failed" {
-                    teardown(notifyTablet: false, keepDisplay: false, next: .idle)
-                    lastError = "Tablet could not decode the selected video format. (\(e.message))"
+                    if codec == .hevc, forcedCodec == nil {
+                        Log.shared.warn("Tablet's HEVC decoder failed (\(e.message)); retrying with H.264.")
+                        forcedCodec = .h264
+                        reconfigure(reason: "HEVC decode failed on the tablet", recreateDisplay: false)
+                    } else {
+                        teardown(notifyTablet: false, keepDisplay: false, next: .idle)
+                        lastError = "Tablet could not decode the selected video format. (\(e.message))"
+                    }
                 }
             }
         case .gesture, .stylus:
@@ -446,13 +534,14 @@ final class SessionManager {
         t.schedule(deadline: .now() + 1, repeating: 1.0)
         t.setEventHandler { [weak self] in
             guard let self = self, let cfg = self.config else { return }
+            self.adaptBitrate()
             self.diagnostics.sample(connected: self.connection.state.isReady,
                                     rttMs: self.connection.rttMillis,
                                     clockOffsetMicros: self.connection.clockOffsetMicros,
                                     inputLatencyMs: self.inputLatency(),
                                     pendingBytes: self.connection.pendingBytes,
-                                    streamSize: "\(cfg.width)×\(cfg.height) @ \(cfg.fps)",
-                                    bitrate: cfg.bitrate)
+                                    streamSize: "\(cfg.width)×\(cfg.height) @ \(cfg.fps) \(self.codec.title)",
+                                    bitrate: self.currentBitrate > 0 ? self.currentBitrate : cfg.bitrate)
         }
         t.resume()
         statsTimer = t
