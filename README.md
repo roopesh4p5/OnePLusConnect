@@ -21,6 +21,22 @@ Mac (menu bar app)                              OnePlus Pad Go 2 (Android app)
  adb forward tcp:27183 / LAN ip:27183 ──┘  Wi-Fi └─ 0.0.0.0:27183 server + UDP 27184 beacon
 ```
 
+## Download (prebuilt)
+
+Both ready-to-install builds live in [`dist/`](dist) — no toolchain needed:
+
+| File | For | Install |
+| --- | --- | --- |
+| [`dist/One+Connect-0.1.0.dmg`](dist/One+Connect-0.1.0.dmg) | Mac (Apple silicon, macOS 15+) | Open the disk image, drag **One+Connect** to Applications, launch it from Applications. |
+| [`dist/OnePlusConnect-0.1.0.apk`](dist/OnePlusConnect-0.1.0.apk) | OnePlus Pad Go 2 / Android 10+ | Copy to the tablet and tap it (allow "install unknown apps"), or `adb install -r OnePlusConnect-0.1.0.apk`. |
+
+The Mac app is signed with a self-signed development certificate, so the first launch needs
+**right-click → Open** (or System Settings → Privacy & Security → "Open Anyway"). It then asks for
+Screen Recording and Accessibility — both are required, see [Mac app](#mac-app) below. The APK is a
+debug build, which is why it is installable without a Play Store signature.
+
+Rebuild the installers with `mac/scripts/make_dmg.sh` and `cd android && ./gradlew assembleDebug`.
+
 ## Repository layout
 
 | Path | What |
@@ -29,7 +45,10 @@ Mac (menu bar app)                              OnePlus Pad Go 2 (Android app)
 | `PROTOCOL.md` | Wire protocol shared by both apps |
 | `mac/` | Swift Package (menu bar app). `Sources/OnePlusConnect/{Protocol,Transport,Connection,Session,Display,Capture,Encoder,Input,Diagnostics,Preferences,UI}` |
 | `mac/Sources/CGVirtualDisplayShim` | Objective-C shim over the private `CGVirtualDisplay` API (Extend mode) |
-| `mac/scripts/build_app.sh` | Builds and ad-hoc signs `mac/build/One+Connect.app` |
+| `mac/scripts/build_app.sh` | Builds and signs `mac/build/One+Connect.app` (stable dev identity via `make_signing_identity.sh`, else ad-hoc) |
+| `mac/scripts/make_dmg.sh` | Packages the app into `dist/One+Connect-<version>.dmg` (replaces any older one) |
+| `dist/` | Prebuilt installers for download: the Mac `.dmg` and the tablet `.apk` |
+| `logo.png` | Source artwork for both app icons |
 | `scripts/make_icons.swift` | Regenerates both app icons from `logo.png` (`swift scripts/make_icons.swift`) |
 | `android/` | Gradle project (Kotlin + Jetpack Compose). Packages: `protocol, connection, video, input, usb, diagnostics, ui` |
 
